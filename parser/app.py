@@ -60,6 +60,7 @@ def toggle_compare(sid: int):
 def clear_compare():
     st.session_state.selected = set()
     st.session_state.pop("last_advice", None)
+    st.session_state.pop("selection_summary", None)
 
 
 def save_crm(sid: int, status_key: str, note_key: str, prev_note: str, org: str, author: str):
@@ -67,13 +68,22 @@ def save_crm(sid: int, status_key: str, note_key: str, prev_note: str, org: str,
     note = (st.session_state.get(note_key) or "").strip()
     db.save_note(con, sid, st.session_state[status_key], note or prev_note, org_name=org, author=author)
     st.session_state[note_key] = ""
-    st.toast("Сохранено в CRM")
+    # toast из колбэка в диалоге (fragment rerun) ломает страницу — показываем его при отрисовке
+    st.session_state["crm_saved"] = True
+
+
+def show_saved_toast():
+    if st.session_state.pop("crm_saved", False):
+        st.toast("Сохранено в CRM")
 
 
 def history_line(h: dict, fmt: str) -> str:
     t_str = datetime.fromtimestamp(h["created_at"]).strftime(fmt)
     line = f"🕒 *{t_str}* · **{h['author']}**: {STATUS_BADGES.get(h['status'], h['status'])}"
     return line + (f" — *{h['text']}*" if h.get("text") else "")
+
+
+show_saved_toast()
 
 # --- 1. Боковая панель: Организация, Пользователь и Фильтры ---
 with st.sidebar:
@@ -184,25 +194,22 @@ def coords(city, region=None):
 
 
 FALLBACK_LABELS = {"bm25_cross": "BM25 + Cross-Encoder", "bm25": "BM25"}
+fallback_model = None  # чем ранжировали, если выбранная модель упала; предупреждение — одно на страницу
 
 
 def run_ranking(rows=None):
+    global fallback_model
     rows = rows if rows is not None else db.all_suppliers(con, org_name=current_org)
-    # LLM без ключа / лимит API / cross-encoder не скачался — не роняем страницу, а спускаемся до BM25.
-    # Упавшую модель в этой сессии больше не пробуем: иначе каждый клик ждёт повторную загрузку.
-    failed = st.session_state.setdefault("failed_models", set())
-    chain = [m for m in dict.fromkeys([selected_model, "bm25_cross", "bm25"]) if m not in failed or m == "bm25"]
-    for model in chain:
+    # LLM без ключа / лимит API / cross-encoder не скачался — не роняем страницу, а спускаемся до BM25
+    for model in dict.fromkeys([selected_model, "bm25_cross", "bm25"]):
         try:
             res = ranking.rank(rows, parsed, pc.CATEGORIES, coords, model=model)
         except Exception as e:
             if model == "bm25":
                 raise
             print(f"Ranking model {model} failed: {e}")
-            failed.add(model)
             continue
-        if model != selected_model:
-            st.warning(f"Выбранная модель ранжирования сейчас недоступна — показываю результаты {FALLBACK_LABELS[model]}.")
+        fallback_model = model if model != selected_model else None
         return res
 
 
@@ -245,6 +252,9 @@ if parsed["city"] and results is not None:
         if geocode_missing(results[:30]):
             results = run_ranking()
 
+if fallback_model:
+    st.warning(f"Выбранная модель ранжирования сейчас недоступна — показываю результаты {FALLBACK_LABELS[fallback_model]}.")
+
 # Фильтры
 if only_contacts:
     results = [r for r in results if r["phones"] or r["emails"]]
@@ -261,6 +271,7 @@ if cat_f != "— любая —":
 # --- 2.5 Модальный диалог: Полный B2B-Паспорт товара и поставщика ---
 @st.dialog("📦 B2B-Паспорт товара и компании", width="large")
 def show_b2b_passport_dialog(item_id: int):
+    show_saved_toast()
     fresh_suppliers = {s["id"]: s for s in db.all_suppliers(con, org_name=current_org)}
     item = fresh_suppliers.get(item_id)
     if not item:
