@@ -103,7 +103,7 @@ streamlit run parser/app.py
 │   ├── live.py                # Live-добор поставщиков и контактов на лету
 │   ├── eval_search.py         # Бенчмарк качества поиска (P@10, nDCG@10)
 │   ├── eval_labels.json       # Датасет для валидации поиска
-│   └── suppliers.db           # Локальная база SQLite (2500+ поставщиков)
+│   └── suppliers.json         # Входной датасет (БД SQLite инициализируется автоматически)
 ├── requirements.txt           # Зависимости Python
 ├── .env.example               # Пример конфигурации API
 └── README.md                  # Документация проекта
