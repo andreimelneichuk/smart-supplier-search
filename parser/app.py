@@ -1,4 +1,5 @@
 """Streamlit-интерфейс каталога поставщиков. Запуск: streamlit run parser/app.py"""
+import time
 from datetime import datetime
 import streamlit as st
 
@@ -197,17 +198,24 @@ FALLBACK_LABELS = {"bm25_cross": "BM25 + Cross-Encoder", "bm25": "BM25"}
 fallback_model = None  # чем ранжировали, если выбранная модель упала; предупреждение — одно на страницу
 
 
+RANK_RETRY_SEC = 120  # упавшую модель не дёргаем на каждом клике: иначе каждый rerun ждёт API и снова падает
+
+
 def run_ranking(rows=None):
     global fallback_model
     rows = rows if rows is not None else db.all_suppliers(con, org_name=current_org)
+    failed = st.session_state.setdefault("rank_failed_at", {})
     # LLM без ключа / лимит API / cross-encoder не скачался — не роняем страницу, а спускаемся до BM25
     for model in dict.fromkeys([selected_model, "bm25_cross", "bm25"]):
+        if model != "bm25" and time.time() - failed.get(model, 0) < RANK_RETRY_SEC:
+            continue
         try:
             res = ranking.rank(rows, parsed, pc.CATEGORIES, coords, model=model)
         except Exception as e:
             if model == "bm25":
                 raise
             print(f"Ranking model {model} failed: {e}")
+            failed[model] = time.time()
             continue
         fallback_model = model if model != selected_model else None
         return res
@@ -305,7 +313,8 @@ def show_b2b_passport_dialog(item_id: int):
         if b_c2.button("🔄 AI-Аудит", key=f"dlg_reai_{item['id']}", use_container_width=True,
                        help="Повторно запросить у LLM детальный B2B-аудит описания"):
             st.session_state[force_key] = True
-            st.rerun()
+            # перерисовываем только окно: полный rerun закрывает диалог, и аудит запускался при следующем открытии
+            st.rerun(scope="fragment")
 
     st.divider()
 
@@ -406,7 +415,7 @@ def show_b2b_passport_dialog(item_id: int):
 
     with t_full:
         st.markdown("##### 📄 Исходное не обрезанное описание товара и компании:")
-        st.text_area("Полный текст:", value=item.get("description") or full_text, height=180, disabled=True, key=f"dlg_raw_{item['id']}")
+        st.text_area("Полный текст:", value=max(full_text, item.get("description") or "", key=len), height=180, disabled=True, key=f"dlg_raw_{item['id']}")
 
         extra_info_rows = []
         if item.get("primary_products"):
