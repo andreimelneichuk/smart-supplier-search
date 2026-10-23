@@ -155,7 +155,8 @@ def extract_extra_info(client: OpenAI | None, supplier: dict) -> dict:
     try:
         data = parse_json_from_llm(call_llm(client, prompt, max_tokens=250))
         if isinstance(data, dict):
-            return data
+            # без min_order поставщик считается необогащённым и LLM вызывается на каждом клике
+            return {**DEFAULT_EXTRA, **{k: v for k, v in data.items() if k in DEFAULT_EXTRA and v}}
     except Exception as e:
         print(f"Error enriching {name}: {e}")
 
@@ -336,10 +337,12 @@ def select_candidates_via_llm(candidates: list[dict], query: str, user_city: str
                     "summary": "AI не нашёл в топе выдачи точных совпадений — в сравнение добавлены 3 лучших по рейтингу. "
                                + (data.get("summary") or ""),
                 }
-            return {
-                "selected_ids": chosen,
-                "summary": data.get("summary", "Отобраны наиболее релевантные поставщики через AI.")
-            }
+            # пользователь не видит внутренних id — в пояснении заменяем их названиями
+            names = {c["id"]: c.get("name") or "—" for c in candidates}
+            summary = data.get("summary") or "Отобраны наиболее релевантные поставщики через AI."
+            summary = re.sub(r"\b(?:ID:?\s*)?(\d{3,})\b",
+                             lambda m: names[int(m.group(1))] if int(m.group(1)) in names else m.group(0), summary)
+            return {"selected_ids": chosen, "summary": summary}
     except Exception as e:
         print(f"Error in select_candidates_via_llm: {e}")
 
@@ -359,10 +362,9 @@ def get_or_create_b2b_passport(con, supplier: dict, force_refresh: bool = False)
     - Экспертной оценки: Green Flags, Red Flags и 3 вопросов менеджеру на первый созвон
     """
     sid = supplier["id"]
-    if not force_refresh:
-        cached = db.get_passport(con, sid)
-        if cached and cached.get("passport"):
-            return cached
+    cached = db.get_passport(con, sid)
+    if not force_refresh and cached and cached.get("passport"):
+        return cached
 
     client = get_client()
 
@@ -441,40 +443,34 @@ def get_or_create_b2b_passport(con, supplier: dict, force_refresh: bool = False)
 Полный текст описания и спецификации:
 {context_text}
 
-Извлеки и реалистично структурируй полную B2B-спецификацию в формате JSON:
+Извлеки и структурируй полную B2B-спецификацию. Поля:
+- commercial_terms.min_order — минимальный заказ / партия;
+- commercial_terms.packaging — фасовка и тара;
+- commercial_terms.price_estimate — ориентир цены или условия прайса;
+- commercial_terms.payment_terms — условия оплаты;
+- compliance_and_quality.standards — ГОСТ / ТУ / ТР ТС;
+- compliance_and_quality.certifications — ХАССП, декларации ЕАС, ФГИС «Меркурий», «Честный Знак»;
+- compliance_and_quality.shelf_life — срок годности и условия хранения;
+- compliance_and_quality.product_specs — сорт, жирность, состав, технические свойства;
+- logistics.delivery_type — условия и география доставки;
+- logistics.storage_temp — температурный режим перевозки;
+- buyer_verdict.green_flags — 2-3 сильные стороны именно этого поставщика;
+- buyer_verdict.red_flags — 1-3 риска, которые нужно проверить закупщику;
+- buyer_verdict.negotiation_questions — 3 конкретных вопроса менеджеру на первый созвон.
+
+Каждое значение — строка на русском (в buyer_verdict — списки строк) с конкретным фактом для этой
+компании и товара, а не название поля и не пример формата.
+Опирайся на текст описания. Если параметра там нет, всё равно напиши конкретное типичное для этой
+товарной группы значение (например, срок годности в сутках, фасовку в кг, температуру в °C)
+и добавь в конце « — оценка, уточнить». Не выдумывай номера ГОСТ, которых нет в тексте.
+
+Верни ТОЛЬКО валидный JSON такой структуры:
 {{
-  "commercial_terms": {{
-    "min_order": "Минимальный заказ / партия (напр. от 20 кг, от 1 паллеты, от 30 000 руб)",
-    "packaging": "Фасовка, тара (напр. гофрокороб 10 кг, вакуум, мешки 25/50 кг)",
-    "price_estimate": "Ориентир цены / условия прайса (напр. опт от завода, 350-420 руб/кг)",
-    "payment_terms": "Условия оплаты (напр. 100% предоплата, отсрочка 14 дней для сетей, безнал с НДС)"
-  }},
-  "compliance_and_quality": {{
-    "standards": "ГОСТ / ТУ / регламенты ТР ТС",
-    "certifications": "ХАССП (HACCP), Декларация ЕАС, ФГИС «Меркурий», «Честный Знак»",
-    "shelf_life": "Срок годности и температурные условия",
-    "product_specs": "Технические свойства, сорт, жирность, состав"
-  }},
-  "logistics": {{
-    "delivery_type": "Условия и география доставки (ТК рефрижераторы, паллетная доставка по РФ, самовывоз)",
-    "storage_temp": "Температурный режим логистики (напр. +2..+6°C, -18°C, сухой склад)"
-  }},
-  "buyer_verdict": {{
-    "green_flags": [
-      "Сильная сторона поставщика 1",
-      "Сильная сторона поставщика 2"
-    ],
-    "red_flags": [
-      "Риск или нюанс, который нужно проверить закупщику"
-    ],
-    "negotiation_questions": [
-      "Конкретный практический вопрос менеджеру для первого созвона 1",
-      "Конкретный практический вопрос менеджеру для первого созвона 2",
-      "Конкретный практический вопрос менеджеру для первого созвона 3"
-    ]
-  }}
-}}
-Верни ТОЛЬКО валидный JSON:"""
+  "commercial_terms": {{"min_order": "", "packaging": "", "price_estimate": "", "payment_terms": ""}},
+  "compliance_and_quality": {{"standards": "", "certifications": "", "shelf_life": "", "product_specs": ""}},
+  "logistics": {{"delivery_type": "", "storage_temp": ""}},
+  "buyer_verdict": {{"green_flags": [], "red_flags": [], "negotiation_questions": []}}
+}}"""
 
     passport_data = None
     try:
@@ -484,12 +480,20 @@ def get_or_create_b2b_passport(con, supplier: dict, force_refresh: bool = False)
         print(f"Error generating passport for {name}: {e}")
 
     if not passport_data or not isinstance(passport_data, dict):
-        passport_data = default_passport
+        # LLM недоступна: не затираем прежний аудит шаблоном и не кэшируем шаблон — при следующем открытии повторим
+        if cached and cached.get("passport"):
+            return cached
+        return {"passport": default_passport, "full_text": context_text}
     else:
         # Убедимся, что все ключи верхнего уровня присутствуют
         for section in ("commercial_terms", "compliance_and_quality", "logistics", "buyer_verdict"):
-            if section not in passport_data:
+            if not isinstance(passport_data.get(section), dict):
                 passport_data[section] = default_passport[section]
+            # пустое поле дало бы «—» в паспорте и пустой min_order, из-за которого сравнение заново дёргает LLM
+            for k, v in default_passport[section].items():
+                val = passport_data[section].get(k)
+                if not val or (isinstance(val, str) and not re.sub(r"[\W_]|оценка|уточнить", "", val, flags=re.I)):
+                    passport_data[section][k] = v
 
     # Сохраняем в кэш БД
     db.save_passport(con, sid, passport_data, context_text)

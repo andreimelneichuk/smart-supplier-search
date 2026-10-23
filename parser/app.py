@@ -1,4 +1,5 @@
 """Streamlit-интерфейс каталога поставщиков. Запуск: streamlit run parser/app.py"""
+import time
 from datetime import datetime
 import streamlit as st
 
@@ -60,6 +61,7 @@ def toggle_compare(sid: int):
 def clear_compare():
     st.session_state.selected = set()
     st.session_state.pop("last_advice", None)
+    st.session_state.pop("selection_summary", None)
 
 
 def save_crm(sid: int, status_key: str, note_key: str, prev_note: str, org: str, author: str):
@@ -67,13 +69,22 @@ def save_crm(sid: int, status_key: str, note_key: str, prev_note: str, org: str,
     note = (st.session_state.get(note_key) or "").strip()
     db.save_note(con, sid, st.session_state[status_key], note or prev_note, org_name=org, author=author)
     st.session_state[note_key] = ""
-    st.toast("Сохранено в CRM")
+    # toast из колбэка в диалоге (fragment rerun) ломает страницу — показываем его при отрисовке
+    st.session_state["crm_saved"] = True
+
+
+def show_saved_toast():
+    if st.session_state.pop("crm_saved", False):
+        st.toast("Сохранено в CRM")
 
 
 def history_line(h: dict, fmt: str) -> str:
     t_str = datetime.fromtimestamp(h["created_at"]).strftime(fmt)
     line = f"🕒 *{t_str}* · **{h['author']}**: {STATUS_BADGES.get(h['status'], h['status'])}"
     return line + (f" — *{h['text']}*" if h.get("text") else "")
+
+
+show_saved_toast()
 
 # --- 1. Боковая панель: Организация, Пользователь и Фильтры ---
 with st.sidebar:
@@ -183,14 +194,31 @@ def coords(city, region=None):
     return geo.cached_coords(con, city, region)
 
 
+FALLBACK_LABELS = {"bm25_cross": "BM25 + Cross-Encoder", "bm25": "BM25"}
+fallback_model = None  # чем ранжировали, если выбранная модель упала; предупреждение — одно на страницу
+
+
+RANK_RETRY_SEC = 120  # упавшую модель не дёргаем на каждом клике: иначе каждый rerun ждёт API и снова падает
+
+
 def run_ranking(rows=None):
+    global fallback_model
     rows = rows if rows is not None else db.all_suppliers(con, org_name=current_org)
-    try:
-        return ranking.rank(rows, parsed, pc.CATEGORIES, coords, model=selected_model)
-    except Exception as e:  # LLM-реранкер без ключа / лимит API — не роняем страницу
-        print(f"Ranking model {selected_model} failed: {e}")
-        st.warning("Выбранная модель ранжирования сейчас недоступна — показываю результаты BM25 + Cross-Encoder.")
-        return ranking.rank(rows, parsed, pc.CATEGORIES, coords, model="bm25_cross")
+    failed = st.session_state.setdefault("rank_failed_at", {})
+    # LLM без ключа / лимит API / cross-encoder не скачался — не роняем страницу, а спускаемся до BM25
+    for model in dict.fromkeys([selected_model, "bm25_cross", "bm25"]):
+        if model != "bm25" and time.time() - failed.get(model, 0) < RANK_RETRY_SEC:
+            continue
+        try:
+            res = ranking.rank(rows, parsed, pc.CATEGORIES, coords, model=model)
+        except Exception as e:
+            if model == "bm25":
+                raise
+            print(f"Ranking model {model} failed: {e}")
+            failed[model] = time.time()
+            continue
+        fallback_model = model if model != selected_model else None
+        return res
 
 
 def distance_km(s: dict):
@@ -232,6 +260,9 @@ if parsed["city"] and results is not None:
         if geocode_missing(results[:30]):
             results = run_ranking()
 
+if fallback_model:
+    st.warning(f"Выбранная модель ранжирования сейчас недоступна — показываю результаты {FALLBACK_LABELS[fallback_model]}.")
+
 # Фильтры
 if only_contacts:
     results = [r for r in results if r["phones"] or r["emails"]]
@@ -248,6 +279,7 @@ if cat_f != "— любая —":
 # --- 2.5 Модальный диалог: Полный B2B-Паспорт товара и поставщика ---
 @st.dialog("📦 B2B-Паспорт товара и компании", width="large")
 def show_b2b_passport_dialog(item_id: int):
+    show_saved_toast()
     fresh_suppliers = {s["id"]: s for s in db.all_suppliers(con, org_name=current_org)}
     item = fresh_suppliers.get(item_id)
     if not item:
@@ -281,7 +313,8 @@ def show_b2b_passport_dialog(item_id: int):
         if b_c2.button("🔄 AI-Аудит", key=f"dlg_reai_{item['id']}", use_container_width=True,
                        help="Повторно запросить у LLM детальный B2B-аудит описания"):
             st.session_state[force_key] = True
-            st.rerun()
+            # перерисовываем только окно: полный rerun закрывает диалог, и аудит запускался при следующем открытии
+            st.rerun(scope="fragment")
 
     st.divider()
 
@@ -382,7 +415,7 @@ def show_b2b_passport_dialog(item_id: int):
 
     with t_full:
         st.markdown("##### 📄 Исходное не обрезанное описание товара и компании:")
-        st.text_area("Полный текст:", value=item.get("description") or full_text, height=180, disabled=True, key=f"dlg_raw_{item['id']}")
+        st.text_area("Полный текст:", value=max(full_text, item.get("description") or "", key=len), height=180, disabled=True, key=f"dlg_raw_{item['id']}")
 
         extra_info_rows = []
         if item.get("primary_products"):
