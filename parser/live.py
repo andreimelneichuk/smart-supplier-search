@@ -144,3 +144,48 @@ def enrich_contacts(con, items: list[dict], workers: int = 3) -> int:
         print(f"Error in enrich_contacts executor: {e}")
     return done
 
+
+
+def _parse_product_cards(html: str) -> list[dict]:
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    out = []
+    for card in soup.select(".card_item.product"):
+        link = card.select_one("a.link[href*='/products/']")
+        if not link:
+            continue
+        price = card.select_one(".item_price b")
+        img = card.select_one(".image img")
+        src = img.get("src", "") if img else ""
+        out.append({
+            "name": link.get_text(" ", strip=True),
+            "url": pc.BASE + link["href"] if link["href"].startswith("/") else link["href"],
+            "price": f"от {price.get_text(strip=True)} ₽" if price else "",
+            "image": pc.BASE + src if src.startswith("/") else src,
+        })
+    return out
+
+
+def fetch_products(item: dict, limit: int = 60) -> list[dict]:
+    """Товары компании со страницы производителя (в БД хранится только их число)."""
+    import re
+    url = item["url"]
+    if "/products/" in url:
+        url = _resolve_producer_url(item)
+        if not url:
+            return []
+    html = _fetch(url)
+    if not html:
+        return []
+    # на странице компании — только первые карточки; полный список — по ссылке «Смотреть всё»
+    m = re.search(r'href="(/products/producer-\d+-[^"]+)"', html)
+    if m:
+        full = _fetch(pc.BASE + m.group(1))
+        if full:
+            html = full
+    seen, items = set(), []
+    for p in _parse_product_cards(html):
+        if p["url"] not in seen:
+            seen.add(p["url"])
+            items.append(p)
+    return items[:limit]
