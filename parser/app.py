@@ -183,14 +183,27 @@ def coords(city, region=None):
     return geo.cached_coords(con, city, region)
 
 
+FALLBACK_LABELS = {"bm25_cross": "BM25 + Cross-Encoder", "bm25": "BM25"}
+
+
 def run_ranking(rows=None):
     rows = rows if rows is not None else db.all_suppliers(con, org_name=current_org)
-    try:
-        return ranking.rank(rows, parsed, pc.CATEGORIES, coords, model=selected_model)
-    except Exception as e:  # LLM-реранкер без ключа / лимит API — не роняем страницу
-        print(f"Ranking model {selected_model} failed: {e}")
-        st.warning("Выбранная модель ранжирования сейчас недоступна — показываю результаты BM25 + Cross-Encoder.")
-        return ranking.rank(rows, parsed, pc.CATEGORIES, coords, model="bm25_cross")
+    # LLM без ключа / лимит API / cross-encoder не скачался — не роняем страницу, а спускаемся до BM25.
+    # Упавшую модель в этой сессии больше не пробуем: иначе каждый клик ждёт повторную загрузку.
+    failed = st.session_state.setdefault("failed_models", set())
+    chain = [m for m in dict.fromkeys([selected_model, "bm25_cross", "bm25"]) if m not in failed or m == "bm25"]
+    for model in chain:
+        try:
+            res = ranking.rank(rows, parsed, pc.CATEGORIES, coords, model=model)
+        except Exception as e:
+            if model == "bm25":
+                raise
+            print(f"Ranking model {model} failed: {e}")
+            failed.add(model)
+            continue
+        if model != selected_model:
+            st.warning(f"Выбранная модель ранжирования сейчас недоступна — показываю результаты {FALLBACK_LABELS[model]}.")
+        return res
 
 
 def distance_km(s: dict):
