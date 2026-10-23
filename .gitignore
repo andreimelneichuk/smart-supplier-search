@@ -21,7 +21,9 @@ ENV/
 *.log
 parser/full.log
 
-# Data caches
-parser/data/llm_cache.db
+# Databases & Caches
+*.db
+*.sqlite
+*.sqlite3
 parser/data/embeddings.npz
 parser/data/*.cache
