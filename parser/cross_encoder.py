@@ -5,17 +5,26 @@
 from functools import lru_cache
 from pathlib import Path
 import math
+import time
 import numpy as np
 
 MODEL_NAME = "BAAI/bge-reranker-v2-m3-int8"
+RETRY_AFTER = 600  # сек: неудачная загрузка (fastembed ретраит ~40 с) не повторяется на каждом клике
 _model = None
+_failed_at = None
 
 
 def get_reranker():
-    global _model
+    global _model, _failed_at
     if _model is None:
+        if _failed_at is not None and time.time() - _failed_at < RETRY_AFTER:
+            raise RuntimeError(f"{MODEL_NAME} недоступна (загрузка не удалась)")
         from fastembed.rerank.cross_encoder import TextCrossEncoder
-        _model = TextCrossEncoder(MODEL_NAME)
+        try:
+            _model = TextCrossEncoder(MODEL_NAME)
+        except Exception:
+            _failed_at = time.time()
+            raise
     return _model
 
 
