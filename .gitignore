@@ -1,0 +1,27 @@
+# Environment variables and keys
+.env
+.env.local
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# OS & IDE
+.DS_Store
+.claude/
+.idea/
+.vscode/
+
+# Logs
+*.log
+parser/full.log
+
+# Data caches
+parser/data/llm_cache.db
+parser/data/embeddings.npz
+parser/data/*.cache
