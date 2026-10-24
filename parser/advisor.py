@@ -158,6 +158,36 @@ def unsupported(claim: str, source: str) -> bool:
     return any(re.search(p, c) and not re.search(p, s) for p in DOC_MARKERS)
 
 
+# догадки «по категории»: «специализация БАД может означать, что мёд не натуральный» — в карточке такого нет
+SPECULATION = re.compile(r"может означать|может говорить о|вероятно|скорее всего|возможно,? (?:это|они|компания)|"
+                         r"может быть не\b|не исключено", re.I)
+
+
+def speculative(claim: str) -> bool:
+    return bool(SPECULATION.search(claim or ""))
+
+
+def quoted(name: str) -> str:
+    """«Воял» -> «Воял», Компания «Воял» -> Компания «Воял» (без вторых кавычек)."""
+    name = (name or "").strip()
+    return name if "«" in name or '"' in name else f"«{name}»"
+
+
+def sign_letter(text: str, author: str | None = None, org: str | None = None) -> str:
+    """Подставляет закупщика вместо заглушек модели («[Ваше имя]», «[Название компании]») и убирает остальные."""
+    if not text:
+        return text
+    m = re.match(r"\s*([^()]+?)\s*(?:\(([^)]*)\))?\s*$", author or "")
+    name, role = (m.group(1), m.group(2)) if m else (None, None)
+    subs = [(r"\[[^\]]*(?:имя|ФИО)[^\]]*\]", name), (r"\[[^\]]*(?:компани|организаци)[^\]]*\]", org),
+            (r"\[[^\]]*должност[^\]]*\]", role and role.lower())]
+    for pat, val in subs:
+        if val:
+            text = re.sub(pat, val, text, flags=re.I)
+    text = re.sub(r",?\s*\[[^\]]*\]", "", text)  # телефон и прочее, чего мы не знаем
+    return re.sub(r"\s+([,.])", r"\1", text).strip()
+
+
 def ground(value, source: str, keep_docs_questions: bool = False):
     """Строка с неподтверждённым фактом -> «не указано»; в списке такие пункты выкидываются."""
     if isinstance(value, list):
@@ -171,7 +201,7 @@ def ground_sentences(text: str, source: str) -> str:
     """Из связного текста (обоснование совета) убираем предложения с неподтверждёнными фактами."""
     if not isinstance(text, str):
         return text
-    kept = [p for p in re.split(r"(?<=[.!?])\s+", text) if not unsupported(p, source)]
+    kept = [p for p in re.split(r"(?<=[.!?])\s+", text) if not unsupported(p, source) and not speculative(p)]
     return " ".join(kept)
 
 
@@ -245,7 +275,8 @@ def enrich_suppliers_extra(con, suppliers_list: list[dict], max_workers: int = 4
         log.error("enrich_suppliers_extra executor: %s", e)
 
 
-def recommend_best_supplier(suppliers: list[dict], query: str, user_city: str | None) -> dict:
+def recommend_best_supplier(suppliers: list[dict], query: str, user_city: str | None,
+                            author: str | None = None, org: str | None = None) -> dict:
     """Генерирует интеллектуальную рекомендацию и скрипт первого контакта."""
     client = get_client()
     if not suppliers:
@@ -293,6 +324,8 @@ def recommend_best_supplier(suppliers: list[dict], query: str, user_city: str | 
 - Покупатель находится в «{user_city or 'не указан'}»: про логистику и доставку говори относительно этого города.
 - Альтернатива — другая компания, не та же под другим названием.
 - Кто ближе, бери из пометки «N-й по близости», сам расстояния не сравнивай.
+- Не делай выводов о качестве товара по категории или названию компании («БАД — значит не натуральный»).
+- Письмо подписывай: {author or 'закупщик'}, {org or 'наша компания'}. Без заглушек в квадратных скобках.
 Верни ответ СТРОГО в формате JSON:
 {{
   "best_choice": {{
@@ -312,10 +345,13 @@ def recommend_best_supplier(suppliers: list[dict], query: str, user_city: str | 
 Ответ ТОЛЬКО валидный JSON:"""
 
     try:
+        if client is None:
+            raise ValueError("нет ключа LLM")
         data = parse_json_from_llm(call_llm(client, prompt, max_tokens=900))
         if isinstance(data, dict):
             checked = check_advice(data, suppliers, candidates_info, query, user_city)
             if checked:
+                checked["outreach_script"] = sign_letter(checked["outreach_script"], author, org)
                 return checked
     except (OpenAIError, ValueError) as e:
         log.warning("LLM advisor: %s", e)
@@ -335,7 +371,7 @@ def recommend_best_supplier(suppliers: list[dict], query: str, user_city: str | 
             "Перед оплатой первого счета обязательно запросите уставные документы и подтверждение в ФГИС «Меркурий».",
             "Уточните точную стоимость и температурный режим доставки до вашего склада.",
         ],
-        "outreach_script": f"Здравствуйте! Заинтересовала ваша продукция ({query or top.get('subcategory')}). Планируем оптовую закупку. Пришлите, пожалуйста, актуальный оптовый прайс-лист, условия доставки и минимальный объем отгрузки.",
+        "outreach_script": f"Здравствуйте! Заинтересовала ваша продукция ({query or top.get('subcategory')}). Планируем оптовую закупку. Пришлите, пожалуйста, актуальный оптовый прайс-лист, условия доставки и минимальный объем отгрузки." + (f" С уважением, {author}, {org}." if author and org else ""),
     }
 
 
@@ -376,7 +412,8 @@ def check_advice(data: dict, suppliers: list[dict], source: str, query: str = ""
         "best_choice": {"name": best["name"], "reason": ground_sentences(data["best_choice"].get("reason", ""), source)},
         "alternative": ({"name": alt["name"], "reason": ground_sentences(data["alternative"].get("reason", ""), source)}
                         if alt else {"name": "—", "reason": "Другой подходящей компании среди выбранных нет."}),
-        "risks": [r for r in (data.get("risks") or []) if isinstance(r, str) and not unsupported(r, source)],
+        "risks": [r for r in (data.get("risks") or [])
+                  if isinstance(r, str) and not unsupported(r, source) and not speculative(r)],
         "outreach_script": data.get("outreach_script") or "",
     }
     # наличие товара проверяем по карточке сами: модель охотно «додумывает», что сыроварня делает моцареллу

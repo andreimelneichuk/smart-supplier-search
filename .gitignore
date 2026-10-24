@@ -33,3 +33,4 @@ parser/data/*.cache
 !parser/data/embeddings.npz
 *.db-wal
 *.db-shm
+parser/.coverage

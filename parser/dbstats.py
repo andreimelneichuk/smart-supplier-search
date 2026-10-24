@@ -21,7 +21,7 @@ def coverage(con):
         "SELECT s.id, s.phones, s.emails, s.city, s.description, s.products_count, s.categories, "
         "s.contacts_at, s.added_at, e.primary_products "
         "FROM suppliers s LEFT JOIN enriched_catalog e ON e.supplier_id = s.id").fetchall()
-    n = len(rows)
+    n = len(rows) or 1  # пустая база: все доли 0, без деления на ноль
     fields = {
         "город": lambda r: _has_text(r["city"]),
         "телефон": lambda r: _has_text(r["phones"]),
@@ -37,7 +37,7 @@ def coverage(con):
     result = {name: sum(1 for r in rows if check(r)) / n for name, check in fields.items()}
     added = [r["added_at"] for r in rows if r["added_at"]]
     freshness = {
-        "всего": n,
+        "всего": len(rows),
         "последнее добавление": datetime.fromtimestamp(max(added)).strftime("%d.%m.%Y") if added else None,
         "контакты обновлялись": sum(1 for r in rows if r["contacts_at"]),
     }
