@@ -215,11 +215,23 @@ def same_company(a: dict, b: dict) -> bool:
     return bool(_brand(a)) and _brand(a) == _brand(b) and a.get("city") == b.get("city")
 
 
+def _company_keys(s: dict) -> set:
+    keys = {("p", re.sub(r"\D", "", p)[-10:]) for p in s.get("phones") or []}
+    keys |= {("e", e) for e in s.get("emails") or []}
+    if _brand(s):
+        keys.add(("b", _brand(s), s.get("city")))
+    return keys
+
+
 def dedupe(suppliers: list[dict]) -> list[dict]:
-    out = []
+    """То же, что попарный same_company, но по индексу ключей: на стартовом экране в списке вся база."""
+    out, seen = [], set()
     for s in suppliers:
-        if not any(same_company(s, o) for o in out):
-            out.append(s)
+        keys = _company_keys(s)
+        if keys & seen:
+            continue
+        seen |= keys
+        out.append(s)
     return out
 
 
