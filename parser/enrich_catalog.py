@@ -228,8 +228,7 @@ def process_batch(client, con: sqlite3.Connection, batch: list, model: str) -> i
 def main():
     client = get_client()
     model = os.environ.get("OPENAI_MODEL", "qwen/qwen3.8-27b")
-    con = sqlite3.connect(HERE / "suppliers.db")
-    con.row_factory = sqlite3.Row
+    con = db.connect()
     init_db(con)
 
     total_suppliers = con.execute("SELECT COUNT(*) FROM suppliers").fetchone()[0]

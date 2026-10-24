@@ -33,8 +33,10 @@ def slug_of(url: str) -> str:
 
 
 def connect() -> sqlite3.Connection:
-    con = sqlite3.connect(DB_PATH, check_same_thread=False)
+    con = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=60.0)
     con.row_factory = sqlite3.Row
+    con.execute("PRAGMA journal_mode=WAL;")
+    con.execute("PRAGMA busy_timeout=60000;")
     con.executescript(SCHEMA)
     cols = {r["name"] for r in con.execute("PRAGMA table_info(suppliers)")}
     if "slug" not in cols:  # миграция старой БД
@@ -186,7 +188,7 @@ def get_passport(con: sqlite3.Connection, supplier_id: int) -> dict | None:
     if row:
         try:
             return {"passport": json.loads(row["passport_json"]), "full_text": row["full_text"]}
-        except Exception:
+        except json.JSONDecodeError:
             return None
     return None
 
@@ -264,7 +266,7 @@ def all_suppliers(con: sqlite3.Connection, org_name: str = "ООО «ФудСе�
             if k in d and d[k]:
                 try:
                     d[k] = json.loads(d[k])
-                except Exception:
+                except json.JSONDecodeError:
                     d[k] = []
             else:
                 d[k] = []
@@ -273,7 +275,7 @@ def all_suppliers(con: sqlite3.Connection, org_name: str = "ООО «ФудСе�
                 if ek in d and d[ek]:
                     try:
                         d[ek] = json.loads(d[ek])
-                    except Exception:
+                    except json.JSONDecodeError:
                         d[ek] = []
         if "user_status" not in d or not d["user_status"]:
             d["user_status"] = "Не связывались"
