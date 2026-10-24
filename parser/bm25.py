@@ -39,7 +39,11 @@ COMPOUND_MIN_STEM, COMPOUND_MIN_TAIL = 4, 3
 def is_compound_of(word: str, lemma: str) -> bool:
     """«хлебокомбинат» / «хлебобулочный» начинаются с «хлеб». Короткие основы («сыр», «мёд») не расширяем:
     «сыр» дал бы «сырьё», «мёд» — «медведь». Хвост от 3 букв отсекает формы самого слова («рыбы»)."""
-    return len(lemma) >= COMPOUND_MIN_STEM and len(word) >= len(lemma) + COMPOUND_MIN_TAIL and word.startswith(lemma)
+    if len(lemma) < COMPOUND_MIN_STEM:
+        return False
+    # «птица» → «птицефабрика», «рыба» → «рыбокомбинат»: в сложном слове конечная гласная меняется
+    base = lemma[:-1] if len(lemma) >= 5 and lemma[-1] in "аяоеиыу" else lemma
+    return len(word) >= len(base) + COMPOUND_MIN_TAIL and word.startswith(base) and word != lemma
 
 
 @lru_cache(maxsize=50000)

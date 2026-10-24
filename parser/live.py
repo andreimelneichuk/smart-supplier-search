@@ -103,13 +103,15 @@ def search_live(con, query: str, pages: int = 2, city: str | None = None, found:
     Если задан город, сначала ищем «товар + город» (сайт ищет по И, выдача точнее), потом просто товар.
     Если по всей фразе нашлось мало компаний, добавляем поиск по главному слову («креветки замороженные» → «креветки»).
     found — сюда складываются id всех компаний, которых сайт выдал по запросу (и новых, и уже известных)."""
-    queries = ([(f"{query} {city}", 1, False)] if city else []) + [(query, pages, False)]
+    # «товар + город» сайт ищет по всем словам и отдаёт любые местные карточки со словом («чипсы из индейки»),
+    # поэтому попаданием по запросу считаем только поиск по самой фразе
+    queries = ([(f"{query} {city}", 1, True)] if city else []) + [(query, pages, False)]
     head = query.split()[0] if query.split() else ""
     if head and head != query:
         queries.append((head, pages, True))
     new, slugs = 0, set()
     for q, n_pages, broad in queries:
-        if broad and len(slugs) >= 10:
+        if broad and q == head and len(slugs) >= 10:
             break  # по всей фразе нашлось достаточно
         for page in range(1, n_pages + 1):
             url = f"{pc.BASE}/search/?q={requests_quote(q)}" + (f"&page={page}" if page > 1 else "")
@@ -119,7 +121,7 @@ def search_live(con, query: str, pages: int = 2, city: str | None = None, found:
                 break
             for it in items:
                 new += db.upsert(con, it)
-                if not broad:  # по одному главному слову сайт выдаёт слишком широко — не считаем это попаданием
+                if not broad:  # по главному слову или с городом выдача слишком широкая — не считаем это попаданием
                     slugs.add(it["slug"])
     con.commit()
     if found is not None and slugs:
