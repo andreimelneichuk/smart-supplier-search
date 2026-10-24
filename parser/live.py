@@ -1,6 +1,10 @@
 """Подгрузка данных с productcenter.ru по запросу: поиск на сайте и контакты производителей."""
+import logging
+import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
+
+import requests
 
 import db
 import productcenter_parser as pc
@@ -10,6 +14,11 @@ CONTACTS_TTL = 14 * 24 * 3600  # контакты считаем свежими 
 LIVE_TIMEOUT = 8               # живые запросы не должны вешать интерфейс
 BLOCK_AFTER = 3                # столько сбоев подряд — считаем, что сайт нас притормозил
 BLOCK_SECONDS = 300
+
+SEARCH_TTL = 6 * 3600          # одинаковый запрос за шесть часов повторно на сайт не отправляем
+_search_cache: dict = {}       # (запрос, город) -> (время, id найденных компаний)
+
+log = logging.getLogger(__name__)
 
 _fails = 0
 _blocked_until = 0.0
@@ -30,8 +39,8 @@ def _fetch(url: str) -> str | None:
         if r.status_code == 200:
             r.encoding = "utf-8"
             html = r.text
-    except Exception as e:
-        print(f"  ! live fetch {url}: {e}")
+    except requests.RequestException as e:
+        log.warning("live fetch %s: %s", url, e)
     if html:
         _fails = 0
         return html
@@ -103,7 +112,14 @@ def search_live(con, query: str, pages: int = 2, city: str | None = None, found:
     """Ищет на сайте, кладёт новых производителей в БД. Возвращает число новых.
     Если задан город, сначала ищем «товар + город» (сайт ищет по И, выдача точнее), потом просто товар.
     Если по всей фразе нашлось мало компаний, добавляем поиск по главному слову («креветки замороженные» → «креветки»).
-    found — сюда складываются id всех компаний, которых сайт выдал по запросу (и новых, и уже известных)."""
+    found — сюда складываются id всех компаний, которых сайт выдал по запросу (и новых, и уже известных).
+    Повторный запрос в течение SEARCH_TTL отдаётся из памяти процесса, сайт не дёргаем."""
+    key = (query, city)
+    hit = _search_cache.get(key)
+    if hit and time.time() - hit[0] < SEARCH_TTL:
+        if found is not None:
+            found.update(hit[1])
+        return 0
     # «товар + город» сайт ищет по всем словам и отдаёт любые местные карточки со словом («чипсы из индейки»),
     # поэтому попаданием по запросу считаем только поиск по самой фразе
     queries = ([(f"{query} {city}", 1, True)] if city else []) + [(query, pages, False)]
@@ -127,9 +143,13 @@ def search_live(con, query: str, pages: int = 2, city: str | None = None, found:
                 if not broad:  # по главному слову или с городом выдача слишком широкая — не считаем это попаданием
                     slugs.add(it["slug"])
     con.commit()
-    if found is not None and slugs:
+    ids = set()
+    if slugs:
         marks = ",".join("?" * len(slugs))
-        found.update(r[0] for r in con.execute(f"SELECT id FROM suppliers WHERE slug IN ({marks})", list(slugs)))
+        ids = {r[0] for r in con.execute(f"SELECT id FROM suppliers WHERE slug IN ({marks})", list(slugs))}
+    if found is not None:
+        found.update(ids)
+    _search_cache[key] = (time.time(), ids)
     return new
 
 
@@ -157,7 +177,9 @@ def _fetch_one(item: dict):
                 return item["id"], None, None
         html = _fetch(url)
         return item["id"], url, (pc.parse_details(html) if html else None)
-    except Exception:
+    except (requests.RequestException, ValueError, AttributeError, KeyError) as e:
+        # AttributeError/ValueError — сайт вернул страницу, которую разбор не понял (верстка изменилась)
+        log.warning("contacts for %s: %s", item.get("id"), e)
         return item["id"], None, None
 
 
@@ -177,10 +199,10 @@ def enrich_contacts(con, items: list[dict], workers: int = 3) -> int:
                             db.set_url(con, sid, url)
                         db.save_contacts(con, sid, det["phones"], det["emails"])
                         done += 1
-                    except Exception:
-                        pass
-    except Exception as e:
-        print(f"Error in enrich_contacts executor: {e}")
+                    except sqlite3.Error as e:
+                        log.warning("save contacts for %s: %s", sid, e)
+    except RuntimeError as e:  # ThreadPoolExecutor: интерпретатор завершается или пул уже закрыт
+        log.error("enrich_contacts executor: %s", e)
     return done
 
 
