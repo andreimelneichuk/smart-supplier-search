@@ -74,9 +74,13 @@ def variants(docs, query):
     return out
 
 
-def ndcg(rels):
+def ndcg(rels, ideal_gains=None):
+    """rels — оценки выдачи по позициям (0/1 или 0/1/2). ideal_gains — оценки ВСЕХ размеченных релевантных:
+    идеал строится по ним, и пропущенная релевантная компания снижает метрику.
+    Без ideal_gains идеал берётся из самой выдачи — так считалось раньше, и пропуски не штрафовались."""
     dcg = sum(r / np.log2(i + 2) for i, r in enumerate(rels))
-    ideal = sum(1 / np.log2(i + 2) for i in range(min(sum(rels), len(rels))))
+    gains = sorted(ideal_gains if ideal_gains is not None else [r for r in rels if r], reverse=True)[:len(rels)]
+    ideal = sum(g / np.log2(i + 2) for i, g in enumerate(gains))
     return dcg / ideal if ideal else 0.0
 
 
@@ -101,10 +105,12 @@ def main(mode):
         rel = set(labels.get(q, []))
         for name, idx in variants(docs, q).items():
             top = [1 if docs[i]["slug"] in rel else 0 for i in idx[:K]]
-            rows.setdefault(name, []).append((sum(top) / K, ndcg(top + [0] * (K - len(top))), len(idx)))
-    print(f"{'вариант':14s} P@{K}   nDCG@{K}")
+            pad = top + [0] * (K - len(top))
+            rows.setdefault(name, []).append((sum(top) / K, ndcg(pad, [1] * len(rel)), len(idx), ndcg(pad)))
+    print(f"{'вариант':14s} P@{K}   nDCG@{K}  (старый nDCG без штрафа за пропуски)")
     for name, r in rows.items():
-        print(f"{name:14s} {np.mean([x[0] for x in r]):.3f}  {np.mean([x[1] for x in r]):.3f}")
+        print(f"{name:14s} {np.mean([x[0] for x in r]):.3f}  {np.mean([x[1] for x in r]):.3f}    "
+              f"({np.mean([x[3] for x in r]):.3f})")
     print("\nпо запросам P@10 (варианты по порядку):")
     ref_key = "hybrid_bm25" if "hybrid_bm25" in rows else next(iter(rows))
     for j, q in enumerate(QUERIES):
