@@ -128,7 +128,9 @@ def geocode(con: sqlite3.Connection, city: str, region: str | None = None):
     try:
         r = requests.get(NOMINATIM, params={"q": q, "format": "json", "limit": 1, "countrycodes": "ru"},
                          headers={"User-Agent": UA}, timeout=10)
-        data = r.json() if r.status_code == 200 else None
+        if r.status_code != 200:
+            return None  # сбой сервиса — в кэш не пишем, попробуем позже
+        data = r.json()
     except (requests.RequestException, ValueError):
         return None  # сбой сети — в кэш не пишем, попробуем позже
     lat, lon = (float(data[0]["lat"]), float(data[0]["lon"])) if data else (None, None)

@@ -4,7 +4,7 @@ from datetime import datetime
 import streamlit as st
 
 import cross_encoder
-import coverage
+import dbstats
 import db
 import live
 import productcenter_parser as pc
@@ -43,7 +43,7 @@ def load_models():
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def db_freshness():
-    return coverage.coverage(db.connect())[1]
+    return dbstats.coverage(db.connect())[1]
 
 
 con = get_con()
@@ -471,7 +471,7 @@ def show_b2b_passport_dialog(item_id: int):
             st.markdown(f"**{q_idx}.** {q_text}")
 
         st.markdown("##### Первое письмо — можно скопировать")
-        first_contact = f"Здравствуйте! Заинтересовала продукция «{item.get('subcategory') or 'продукты питания'}» компании «{item['name']}». Прошу направить актуальный оптовый прайс-лист, условия минимальной партии и доставки до г. {parsed.get('city') or 'нашего склада'}."
+        first_contact = f"Здравствуйте! Заинтересовала продукция «{item.get('subcategory') or 'продукты питания'}» компании {advisor.quoted(item['name'])}. Прошу направить актуальный оптовый прайс-лист, условия минимальной партии и доставки до г. {parsed.get('city') or 'нашего склада'}. С уважением, {current_author}, {current_org}."
         st.code(first_contact, language="text")
 
     with t_full:
@@ -750,7 +750,7 @@ with tab_cmp:
 
         if run_ai:
             with st.spinner("Сравниваю поставщиков…"):
-                advice = advisor.recommend_best_supplier(sel, q, parsed.get("city"))
+                advice = advisor.recommend_best_supplier(sel, q, parsed.get("city"), current_author, current_org)
                 st.session_state["last_advice"] = advice
                 st.session_state["last_advice_for"] = sorted(st.session_state.selected)
 

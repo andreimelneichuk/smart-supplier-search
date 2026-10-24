@@ -1,0 +1,5 @@
+[run]
+omit =
+    tests/*
+    eval_search.py
+    eval_holdout.py
