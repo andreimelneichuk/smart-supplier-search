@@ -507,3 +507,12 @@ def test_speculative_risk_is_dropped():
 def test_quoted_does_not_double_quotes():
     assert advisor.quoted("Компания «Воял»") == "Компания «Воял»"
     assert advisor.quoted("Воял") == "«Воял»"
+
+
+def test_kappa_and_recall_aware_ndcg():
+    import eval_agreement, eval_search
+    assert eval_agreement.kappa([1, 0, 1, 0], [1, 0, 1, 0]) == 1.0
+    assert abs(eval_agreement.kappa([1, 1, 0, 0], [1, 0, 1, 0])) < 1e-9
+    # одна найденная из трёх релевантных: раньше было 1.0, теперь пропуски штрафуются
+    assert eval_search.ndcg([1, 0, 0]) == 1.0
+    assert eval_search.ndcg([1, 0, 0], [1, 1, 1]) < 0.5

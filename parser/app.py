@@ -47,11 +47,6 @@ def db_freshness():
     return dbstats.coverage(db.connect())[1]
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def field_coverage():
-    return dbstats.coverage(db.connect())[0]
-
-
 con = get_con()
 st.session_state.setdefault("selected", set())
 st.session_state.setdefault("live_done", set())
@@ -331,7 +326,7 @@ def show_b2b_passport_dialog(item_id: int):
         item_dist = distance_km(item)
         if item_dist:
             meta_items.append(f"*(≈ {item_dist} км от г. {parsed['city']})*")
-        meta_items.append(f"Товар: **{item['subcategory'] or '—'}**")
+        meta_items.append(f"Основной товар: **{item['subcategory'] or '—'}**")
         if item.get("products_count"):
             meta_items.append(f"Ассортимент: **{goods_word(item['products_count'])}**")
         st.markdown(" · ".join(meta_items))
@@ -384,6 +379,21 @@ def show_b2b_passport_dialog(item_id: int):
             return "\n".join(f"- {x}" for x in v)
         return str(v or "—")
 
+    def is_missing(v):
+        return not v or str(v).strip() in (advisor.NOT_SPECIFIED, "—", "[]", "{}")
+
+    to_ask = []  # вопросы для первого звонка по полям, которых нет в каталоге
+
+    def show_field(title, value, question, as_info=False):
+        # пустое поле не выводим отдельным блоком: оно становится вопросом для первого звонка
+        if is_missing(value):
+            to_ask.append(question)
+            return
+        st.markdown(f"##### {title}")
+        (st.info if as_info else st.write)(fmt_val(value))
+
+    st.caption("Данные из каталога productcenter.ru; недостающее уточняется у поставщика.")
+
     t_comm, t_goods, t_qual, t_logi, t_ai, t_full, t_crm = st.tabs([
         ":material/payments: Условия и оплата",
         f":material/inventory_2: Ассортимент ({item['products_count'] or '—'})",
@@ -395,40 +405,27 @@ def show_b2b_passport_dialog(item_id: int):
     ])
 
     with t_comm:
-        cov = field_coverage()
-        st.caption(":material/info: Цена и минимальный заказ в каталоге почти никогда не пишутся: в тексте карточек они есть у "
-                   f"{cov['упомянута цена (текст карточки)']:.0%} и {cov['упомянут минимальный заказ (текст)']:.0%} "
-                   "производителей. Обычно здесь будет «не указано» — эти условия уточняются при первом контакте.")
+        st.caption("Условия в каталоге не публикуются, уточняются при первом контакте. Что спросить — во вкладке «Плюсы и риски».")
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("##### Минимальный заказ")
-            st.info(fmt_val(comm.get("min_order", advisor.NOT_SPECIFIED)))
-
-            st.markdown("##### Цены")
-            st.markdown(fmt_val(comm.get("price_estimate", advisor.NOT_SPECIFIED)))
+            show_field("Минимальный заказ", comm.get("min_order"), "Какой минимальный заказ?", as_info=True)
+            show_field("Цены", comm.get("price_estimate"), "Какой оптовый прайс и цена за единицу?")
 
         with c2:
-            st.markdown("##### Упаковка")
-            st.write(fmt_val(comm.get("packaging", "Стандартная оптовая тара")))
-
-            st.markdown("##### Оплата")
-            st.write(fmt_val(comm.get("payment_terms", "Безналичный расчет с НДС")))
+            show_field("Упаковка", comm.get("packaging"), "Есть ли фасовка под наш объём?")
+            show_field("Оплата", comm.get("payment_terms"), "Какие условия оплаты?")
 
     with t_qual:
         q1, q2 = st.columns(2)
         with q1:
-            st.markdown("##### Стандарты (ГОСТ, ТУ)")
-            st.info(fmt_val(compl.get("standards", "ГОСТ / ТУ")))
-
-            st.markdown("##### Сертификаты и документы")
-            st.write(fmt_val(compl.get("certifications", "Декларация ЕАС, ХАССП, ФГИС «Меркурий»")))
+            show_field("Стандарты (ГОСТ, ТУ)", compl.get("standards"), "Есть ли ГОСТ или ТУ на продукцию?", as_info=True)
+            show_field("Сертификаты и документы", compl.get("certifications"),
+                       "Какие сертификаты есть (ХАССП, ЕАС, «Меркурий»)?")
 
         with q2:
-            st.markdown("##### Срок годности")
-            st.write(fmt_val(compl.get("shelf_life", "В соответствии с регламентом")))
-
-            st.markdown("##### Характеристики товара")
-            st.write(fmt_val(compl.get("product_specs", f"Категория: {item.get('subcategory', '—')}")))
+            show_field("Срок годности", compl.get("shelf_life"), "Какой срок годности и хранения?")
+            show_field("Характеристики товара", compl.get("product_specs"),
+                       "Какие характеристики: состав, жирность, размер упаковки?")
 
     with t_goods:
         with st.spinner("Загружаю товары с сайта производителя…"):
@@ -460,11 +457,11 @@ def show_b2b_passport_dialog(item_id: int):
     with t_logi:
         l1, l2 = st.columns(2)
         with l1:
-            st.markdown("##### Как и куда доставляют")
-            st.info(fmt_val(logi.get("delivery_type", "ТК по РФ, самовывоз")))
+            show_field("Как и куда доставляют", logi.get("delivery_type"),
+                       "Как доставляют и есть ли доставка в наш город?", as_info=True)
         with l2:
-            st.markdown("##### Температура при перевозке")
-            st.write(fmt_val(logi.get("storage_temp", "Соответствует категории продукции")))
+            show_field("Температура при перевозке", logi.get("storage_temp"),
+                       "Какой температурный режим при хранении и перевозке?")
 
     with t_ai:
         a1, a2 = st.columns(2)
@@ -479,7 +476,8 @@ def show_b2b_passport_dialog(item_id: int):
                 st.markdown(f"- {rf}")
 
         st.markdown("##### Вопросы для первого звонка")
-        for q_idx, q_text in enumerate(verdict.get("negotiation_questions", []), 1):
+        questions = to_ask + verdict.get("negotiation_questions", [])
+        for q_idx, q_text in enumerate(questions, 1):
             st.markdown(f"**{q_idx}.** {q_text}")
 
         st.markdown("##### Первое письмо — можно скопировать")
@@ -627,7 +625,7 @@ with tab_list:
                 meta = f":material/location_on: **{r['city'] or 'Город не указан'}**"
                 if parsed["city"] and r.get("distance_km") is not None and r["distance_km"] > 0:
                     meta += f" *(≈ {r['distance_km']} км от г. {parsed['city']})*"
-                meta += f" · Товар: **{r['subcategory'] or '—'}**"
+                meta += f" · Основной товар: **{r['subcategory'] or '—'}**"
                 if r["products_count"]:
                     meta += f" · Ассортимент: **{goods_word(r['products_count'])}**"
                 left.markdown(meta)

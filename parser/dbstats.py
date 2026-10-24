@@ -1,6 +1,6 @@
 """Какая доля карточек базы содержит каждое поле и насколько свежа база.
 
-    python coverage.py          # таблица в markdown для README
+    python dbstats.py           # таблица в markdown для README
 """
 import re
 from datetime import datetime
@@ -44,6 +44,17 @@ def coverage(con):
     return result, freshness
 
 
+PASSPORT_FIELDS = {"min_order": "минимальный заказ", "price_range": "цена",
+                   "certificates": "сертификаты", "delivery_terms": "доставка"}
+
+
+def passport_fill(con):
+    """Сколько открытых паспортов нашли условие в полном тексте страницы: (число паспортов, {поле: сколько нашли})."""
+    from advisor import is_known
+    rows = con.execute(f"SELECT {', '.join(PASSPORT_FIELDS)} FROM supplier_extra").fetchall()
+    return len(rows), {label: sum(1 for r in rows if is_known(r[f])) for f, label in PASSPORT_FIELDS.items()}
+
+
 def main():
     con = db.connect()
     result, freshness = coverage(con)
@@ -52,6 +63,9 @@ def main():
         print(f"| {name} | {share:.0%} |")
     print(f"\nВсего карточек: {freshness['всего']}. Последнее добавление: {freshness['последнее добавление']}. "
           f"Контакты проверялись с сайта у {freshness['контакты обновлялись']}.")
+    n, found = passport_fill(con)
+    print(f"\nОткрыто паспортов: {n}. Условие найдено в полном тексте: "
+          + ", ".join(f"{k} — {v}" for k, v in found.items()) + ".")
 
 
 if __name__ == "__main__":
