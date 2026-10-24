@@ -15,7 +15,8 @@ W_NAME, W_SUB, W_CAT, W_DESC = 1.0, 0.9, 0.6, 0.5
 # веса итоговой оценки
 WEIGHTS = {"relevance": 0.50, "geo": 0.20, "completeness": 0.15, "size": 0.15}
 MIN_RELEVANCE = 0.30
-GEO_SCALE_KM = 400  # гео-оценка = exp(-расстояние / 400 км): 0 км → 1.0, 300 км → 0.47, 1100 км → 0.06
+GEO_SCALE_KM = 400  # гео-оценка = exp(-(расстояние - до ближайшего) / 400 км): ближайший → 1.0, +300 км → 0.47
+SITE_REL_BONUS = 0.15  # компанию выдал поиск сайта по всей фразе запроса — небольшая прибавка к релевантности
 
 
 def stem(w: str) -> str:
@@ -170,16 +171,25 @@ def rank(suppliers: list[dict], parsed: dict, cat_names: dict, coords=None, mode
         rel_scores = search.lexical_scores(suppliers, terms, cat_names)
         min_gate = MIN_RELEVANCE
 
-    out = []
+    site_ids = parsed.get("site_ids") or set()
+    kept = []
     for i, s in enumerate(suppliers):
         # Отсекаем непищевую продукцию (мыло, упаковка, косметика, оборудование), если она размечена LLM
         if s.get("is_food") == 0:
             continue
         rel = float(rel_scores[i])
+        if s["id"] in site_ids and rel > 0:
+            rel = min(1.0, rel + SITE_REL_BONUS)
         if rel < min_gate:
             continue
-        dist = distance_to(s, parsed["city"], user_xy, coords)
-        geo_score = 0.0 if dist is None else math.exp(-dist / GEO_SCALE_KM)
+        kept.append((s, rel, distance_to(s, parsed["city"], user_xy, coords)))
+    # расстояние считаем от ближайшего подходящего поставщика: в Приморье все дальше 2000 км,
+    # и абсолютная шкала давала всем ноль — ближайшие не отличались от самых далёких
+    nearest = min((d for _, _, d in kept if d is not None), default=0.0)
+
+    out = []
+    for s, rel, dist in kept:
+        geo_score = 0.0 if dist is None else math.exp(-(dist - nearest) / GEO_SCALE_KM)
         comp = (0.5 if s.get("phones") else 0) + (0.5 if s.get("emails") else 0)
         size = math.log1p(s.get("products_count") or 0) / math.log1p(max_goods)
         parts = {"relevance": rel, "geo": geo_score, "completeness": comp, "size": size}

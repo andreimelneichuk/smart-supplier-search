@@ -102,8 +102,14 @@ def upsert(con: sqlite3.Connection, item: dict) -> bool:
         if item.get("region_slug"):  # регион дописываем всегда, если он известен
             con.execute("UPDATE suppliers SET region_slug=?, region=COALESCE((SELECT name FROM regions WHERE slug=?), region) "
                         "WHERE id=?", (item["region_slug"], item["region_slug"], row["id"]))
-        if "product_url" in item:
+        if "product_url" in item or item.get("from_search"):
             con.execute("UPDATE suppliers SET categories=? WHERE id=?", (json.dumps(merged), row["id"]))
+            # товары, по которым сайт нашёл компанию, добавляем в описание: иначе наш поиск о них не знает
+            desc = con.execute("SELECT description FROM suppliers WHERE id=?", (row["id"],)).fetchone()[0] or ""
+            extra = [p for p in item.get("found_products", []) if p.lower() not in desc.lower()]
+            if extra:  # в начало: и карточка, и переранжирование читают первые ~200 символов
+                con.execute("UPDATE suppliers SET description=? WHERE id=?",
+                            ("Товары: " + "; ".join(extra) + ". " + desc, row["id"]))
         else:
             con.execute(
                 "UPDATE suppliers SET name=?, url=?, subcategory=?, city=?, description=?, "
