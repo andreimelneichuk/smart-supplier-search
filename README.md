@@ -4,7 +4,7 @@
 
 Тестовое задание на позицию **AI Generalist / AI Automation Specialist** (часть 2).
 
-**Демо:** _ссылка на Streamlit Cloud_ · **Репозиторий:** https://github.com/andreimelneichuk/smart-supplier-search
+**Демо:** https://smart-supplier-search-6o5krctpkuhqe28gnyqrti.streamlit.app/ · **Репозиторий:** https://github.com/andreimelneichuk/smart-supplier-search
 
 ---
 
