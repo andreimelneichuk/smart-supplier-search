@@ -16,6 +16,8 @@ W_NAME, W_SUB, W_CAT, W_DESC = 1.0, 0.9, 0.6, 0.5
 WEIGHTS = {"relevance": 0.50, "geo": 0.20, "completeness": 0.15, "size": 0.15}
 MIN_RELEVANCE = 0.30
 GEO_SCALE_KM = 400  # гео-оценка = exp(-(расстояние - до ближайшего) / 400 км): ближайший → 1.0, +300 км → 0.47
+HEAD_ONLY_FACTOR = 0.5  # запрос «товар + признак», а у поставщика совпал только товар
+MODIFIER_POS = {"ADJF", "ADJS", "PRTF", "PRTS"}
 SITE_REL_BONUS = 0.15  # компанию выдал поиск сайта по всей фразе запроса — небольшая прибавка к релевантности
 
 
@@ -171,6 +173,17 @@ def rank(suppliers: list[dict], parsed: dict, cat_names: dict, coords=None, mode
         rel_scores = search.lexical_scores(suppliers, terms, cat_names)
         min_gate = MIN_RELEVANCE
 
+    # «хлеб ржаной»: пекарня, у которой в карточке нет слова «ржаной», всё равно подходит — реранкер же ставит
+    # таким почти ноль и они отсекаются порогом. Если остальные слова — только признаки (прилагательные),
+    # даём производителям главного товара не меньше HEAD_ONLY_FACTOR от их совпадения по главному слову.
+    # «мясо индейки», «сыр моцарелла» не трогаем: там второе слово и есть товар.
+    head_floor = None
+    if len(terms) > 1 and model != "llm":
+        lem = search.content_lemmas(" ".join(terms))
+        nouns = [l for l, pos, _ in lem if pos == "NOUN"]
+        if len(nouns) == 1 and all(pos in MODIFIER_POS for l, pos, _ in lem if l != nouns[0]):
+            head_floor = nouns[0]
+
     site_ids = parsed.get("site_ids") or set()
     kept = []
     for i, s in enumerate(suppliers):
@@ -178,6 +191,8 @@ def rank(suppliers: list[dict], parsed: dict, cat_names: dict, coords=None, mode
         if s.get("is_food") == 0:
             continue
         rel = float(rel_scores[i])
+        if head_floor and rel < HEAD_ONLY_FACTOR:
+            rel = max(rel, HEAD_ONLY_FACTOR * search.lexical_score(s, [head_floor], cat_names))
         if s["id"] in site_ids and rel > 0:
             rel = min(1.0, rel + SITE_REL_BONUS)
         if rel < min_gate:

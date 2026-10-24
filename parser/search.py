@@ -13,6 +13,8 @@ from pathlib import Path
 import numpy as np
 import pymorphy3
 
+from bm25 import is_compound_of
+
 HERE = Path(__file__).parent
 EMB_CACHE = HERE / "data" / "embeddings.npz"
 MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
@@ -38,6 +40,7 @@ W_SUB, W_NAME, W_CAT, W_DESC = 1.0, 0.85, 0.5, 0.35
 MODIFIER_FACTOR = 0.55  # слово найдено не в «главной» позиции названия: «Яйцо КУРИНОЕ», «Соус из КУРИЦЫ»
 
 
+COMPOUND_FACTOR = 0.8  # «хлебокомбинат» для «хлеб»
 @lru_cache(maxsize=50000)
 def _parse(word: str):
     p = _morph.parse(word)[0]
@@ -73,7 +76,11 @@ def _field_match(lemma: str, tokens: list[tuple[str, str, str]], head_weighted: 
     прочее — MODIFIER_FACTOR."""
     hit = next(((l, pos, role) for l, pos, role in tokens if l == lemma), None)
     if hit is None:
-        return 0.0
+        comp = next(((l, pos, role) for l, pos, role in tokens if is_compound_of(l, lemma)), None)
+        if comp is None:
+            return 0.0
+        # «хлебокомбинат», «хлебобулочный» для «хлеб»: совпадение есть, но слабее точного
+        return COMPOUND_FACTOR * _field_match(comp[0], tokens, head_weighted)
     if not head_weighted:
         return 1.0
     head = next((l for l, pos, _ in tokens if pos == "NOUN"), tokens[0][0] if tokens else None)
@@ -181,15 +188,17 @@ def rrf(*scores: np.ndarray, k: int = 60) -> np.ndarray:
 
 
 _bm25_index = None
-_bm25_docs_len = 0
+_bm25_docs_key = None
 
 
 def get_bm25(docs: list[dict], cat_names: dict):
-    global _bm25_index, _bm25_docs_len
-    if _bm25_index is None or _bm25_docs_len != len(docs):
+    global _bm25_index, _bm25_docs_key
+    # ключ по содержимому, а не по числу карточек: поиск на сайте дописывает товары в описания уже известных компаний
+    key = hash(tuple((d["id"], d.get("subcategory"), d.get("description"), d.get("search_keywords")) for d in docs))
+    if _bm25_index is None or _bm25_docs_key != key:
         import bm25
         _bm25_index = bm25.BM25Index(docs, cat_names)
-        _bm25_docs_len = len(docs)
+        _bm25_docs_key = key
     return _bm25_index
 
 
