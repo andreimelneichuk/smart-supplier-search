@@ -25,5 +25,9 @@ parser/full.log
 *.db
 *.sqlite
 *.sqlite3
-parser/data/embeddings.npz
 parser/data/*.cache
+Тестовое_задание_*.pdf
+
+# готовая база и кэш эмбеддингов лежат в репозитории, чтобы демо работало сразу после клона
+!parser/suppliers.db
+!parser/data/embeddings.npz

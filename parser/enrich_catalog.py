@@ -51,7 +51,7 @@ load_env()
 
 def get_client():
     key = os.environ.get("OPENAI_API_KEY")
-    if not key or "your_openai_api_key_here" in key:
+    if not key or key.startswith("your_"):
         raise RuntimeError("Укажите валидный OPENAI_API_KEY в parser/.env")
     base_url = os.environ.get("OPENAI_BASE_URL")
     return OpenAI(api_key=key, base_url=base_url if base_url else None)
