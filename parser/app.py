@@ -232,6 +232,10 @@ elif parsed["terms"] and query_key not in st.session_state.live_done:
 # компании, которых сайт выдал по этому запросу, не должны тонуть из-за короткого описания у нас
 parsed["site_ids"] = site_found.get(query_key, set())
 results = run_ranking(suppliers)
+typo_fix = None
+if parsed["terms"] and not results and (fixed := ranking.correct_terms(parsed["terms"], suppliers)):
+    typo_fix, parsed["terms"] = parsed["terms"], fixed
+    results = run_ranking(suppliers)
 
 if parsed["city"] and results is not None:
     with st.spinner("Считаю расстояния…") if any(
@@ -344,10 +348,10 @@ def show_b2b_passport_dialog(item_id: int):
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("##### Минимальный заказ")
-            st.info(fmt_val(comm.get("min_order", "По запросу")))
+            st.info(fmt_val(comm.get("min_order", advisor.NOT_SPECIFIED)))
 
             st.markdown("##### Цены")
-            st.markdown(fmt_val(comm.get("price_estimate", "По запросу")))
+            st.markdown(fmt_val(comm.get("price_estimate", advisor.NOT_SPECIFIED)))
 
         with c2:
             st.markdown("##### Упаковка")
@@ -485,138 +489,146 @@ def show_b2b_passport_dialog(item_id: int):
 cmp_title = f"Сравнение ({len(st.session_state.selected)})" if st.session_state.selected else "Сравнение"
 tab_list, tab_cmp = st.tabs([":material/list: Найденные", f":material/compare_arrows: {cmp_title}"])
 
+# без запроса и фильтров сортировать не по чему: вместо «найдено 4800» с случайным первым — подсказка
+idle = not parsed["terms"] and not parsed["city"] and cat_f == "— любая —" and not only_my_crm
+
 with tab_list:
-    pages = max(1, -(-len(results) // PAGE_SIZE))
-    c1, c_ai = st.columns([3, 3])
-    c1.subheader(f"Найдено поставщиков: {len(results)}")
+    if typo_fix and results:
+        st.info(f"По «{' '.join(typo_fix)}» ничего нет — показаны результаты по «{' '.join(parsed['terms'])}».",
+                icon=":material/spellcheck:")
+    if idle:
+        st.info(f"Введите товар, который ищете, — например, «сыр моцарелла Казань» или выберите популярный запрос выше. "
+                f"Город можно написать прямо в запросе: ближайшие поставщики поднимутся выше. "
+                f"В базе {len(suppliers)} производителей.", icon=":material/search:")
+    else:
+        pages = max(1, -(-len(results) // PAGE_SIZE))
+        c1, c_ai = st.columns([3, 3])
+        c1.subheader(f"Найдено поставщиков: {len(results)}")
     
-    # Кнопка умного отбора LLM
-    if results and q:
-        if c_ai.button("Подобрать лучших для сравнения", icon=":material/auto_awesome:", type="primary",
-                       use_container_width=True,
-                       help="Нейросеть просмотрит первые результаты, отсеет лишнее (готовые блюда, добавки) и добавит подходящих производителей в сравнение"):
-            with st.spinner("Выбираю подходящих производителей…"):
-                sel_res = advisor.select_candidates_via_llm(results[:15], q, parsed.get("city"))
-                st.session_state.selected.update(sel_res.get("selected_ids", []))
-                st.session_state["selection_summary"] = sel_res.get("summary", "")
-                st.toast(f"Добавлено в сравнение: {len(sel_res.get('selected_ids', []))}", icon=":material/auto_awesome:")
+        # Кнопка умного отбора LLM
+        if results and q:
+            if c_ai.button("Подобрать лучших для сравнения", icon=":material/auto_awesome:", type="primary",
+                           use_container_width=True,
+                           help="Нейросеть просмотрит первые результаты, отсеет лишнее (готовые блюда, добавки) и добавит подходящих производителей в сравнение"):
+                with st.spinner("Выбираю подходящих производителей…"):
+                    sel_res = advisor.select_candidates_via_llm(results[:15], q, parsed.get("city"))
+                    st.session_state.selected.update(sel_res.get("selected_ids", []))
+                    st.session_state["selection_summary"] = sel_res.get("summary", "")
+                    st.session_state["selection_for"] = query_key
+                    st.toast(f"Добавлено в сравнение: {len(sel_res.get('selected_ids', []))}", icon=":material/auto_awesome:")
+                    st.rerun()
+
+        # ключ зависит от запроса и фильтров: новая выдача открывается с первой страницы
+        page_key = f"page|{query_key}|{selected_model}|{cat_f}|{only_contacts}|{only_my_crm}"
+        # переключатель страниц рисуется под списком, а номер нужен уже здесь — берём его из состояния виджета
+        page = min(st.session_state.get(page_key, 1), pages)
+
+        if st.session_state.get("selection_summary") and st.session_state.get("selection_for") == query_key:
+            c_inf, c_cl = st.columns([10, 1])
+            c_inf.info(f"**Подбор:** {st.session_state['selection_summary']} Откройте вкладку «{cmp_title}».", icon=":material/auto_awesome:")
+            if c_cl.button(":material/close:", key="close_summary", help="Скрыть подсказку"):
+                st.session_state.pop("selection_summary", None)
                 st.rerun()
 
-    # ключ зависит от запроса и фильтров: новая выдача открывается с первой страницы
-    page_key = f"page|{query_key}|{selected_model}|{cat_f}|{only_contacts}|{only_my_crm}"
-    # переключатель страниц рисуется под списком, а номер нужен уже здесь — берём его из состояния виджета
-    page = min(st.session_state.get(page_key, 1), pages)
+        chunk = results[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
 
-    if "selection_summary" in st.session_state and st.session_state["selection_summary"]:
-        c_inf, c_cl = st.columns([10, 1])
-        c_inf.info(f"**Подбор:** {st.session_state['selection_summary']} Откройте вкладку «{cmp_title}».", icon=":material/auto_awesome:")
-        if c_cl.button(":material/close:", key="close_summary", help="Скрыть подсказку"):
-            st.session_state.pop("selection_summary", None)
-            st.rerun()
+        # контакты подгружаем только тем, кто на экране
+        # неудачные попытки не повторяем на каждом клике: иначе любое действие ждёт сетевые таймауты
+        need = [r for r in chunk if not r.get("contacts_at") and r["id"] not in st.session_state.contacts_tried]
+        st.session_state.contacts_tried.update(r["id"] for r in need)
+        if need and not live.is_blocked():
+            with st.spinner(f"Загружаю контакты ({len(need)})…"):
+                try:
+                    live.enrich_contacts(con, need)
+                except Exception as e:
+                    print(f"Error enriching contacts: {e}")
+                by_id = {r["id"]: r for r in db.all_suppliers(con, org_name=current_org)}
+                for r in chunk:
+                    if r["id"] in by_id:
+                        fresh = by_id[r["id"]]
+                        r.update(phones=fresh["phones"], emails=fresh["emails"], contacts_at=fresh["contacts_at"])
 
-    chunk = results[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
+        if not results:
+            st.info("По вашему запросу ничего не найдено. Попробуйте изменить формулировку или сбросить фильтры.")
 
-    # контакты подгружаем только тем, кто на экране
-    # неудачные попытки не повторяем на каждом клике: иначе любое действие ждёт сетевые таймауты
-    need = [r for r in chunk if not r.get("contacts_at") and r["id"] not in st.session_state.contacts_tried]
-    st.session_state.contacts_tried.update(r["id"] for r in need)
-    if need and not live.is_blocked():
-        with st.spinner(f"Загружаю контакты ({len(need)})…"):
-            try:
-                live.enrich_contacts(con, need)
-            except Exception as e:
-                print(f"Error enriching contacts: {e}")
-            by_id = {r["id"]: r for r in db.all_suppliers(con, org_name=current_org)}
-            for r in chunk:
-                if r["id"] in by_id:
-                    fresh = by_id[r["id"]]
-                    r.update(phones=fresh["phones"], emails=fresh["emails"], contacts_at=fresh["contacts_at"])
-
-    if not results:
-        st.info("По вашему запросу ничего не найдено. Попробуйте изменить формулировку или сбросить фильтры.")
-
-    for r in chunk:
-        with st.container(border=True):
-            left, right = st.columns([5, 1.2])
+        for r in chunk:
+            with st.container(border=True):
+                left, right = st.columns([5, 1.2])
             
-            # Название и география
-            left.markdown(f"### [{r['name']}]({r['url']})")
-            meta = f":material/location_on: **{r['city'] or 'Город не указан'}**"
-            if parsed["city"] and r.get("distance_km") is not None and r["distance_km"] > 0:
-                meta += f" *(≈ {r['distance_km']} км от г. {parsed['city']})*"
-            meta += f" · Товар: **{r['subcategory'] or '—'}**"
-            if r["products_count"]:
-                meta += f" · Ассортимент: **{r['products_count']} товаров**"
-            left.markdown(meta)
+                # Название и география
+                left.markdown(f"### [{r['name']}]({r['url']})")
+                meta = f":material/location_on: **{r['city'] or 'Город не указан'}**"
+                if parsed["city"] and r.get("distance_km") is not None and r["distance_km"] > 0:
+                    meta += f" *(≈ {r['distance_km']} км от г. {parsed['city']})*"
+                meta += f" · Товар: **{r['subcategory'] or '—'}**"
+                if r["products_count"]:
+                    meta += f" · Ассортимент: **{r['products_count']} товаров**"
+                left.markdown(meta)
             
-            left.write(r["description"])
+                left.write(r["description"])
 
-            # B2B-параметры (обогащенные данные)
-            b2b_badges = []
-            if r.get("min_order"):
-                b2b_badges.append(f"Мин. заказ: **{r['min_order']}**")
-            if r.get("price_range"):
-                b2b_badges.append(f"Цена: **{r['price_range']}**")
-            if r.get("certificates"):
-                b2b_badges.append(f"Документы: **{r['certificates']}**")
-            if r.get("delivery_terms"):
-                b2b_badges.append(f"Доставка: **{r['delivery_terms']}**")
-            if b2b_badges:
-                left.info(" · ".join(b2b_badges), icon=":material/info:")
+                # B2B-параметры (обогащенные данные)
+                # только то, что поставщик указал сам: пустые поля не заполняем догадками
+                b2b_badges = [f"{label}: **{r[k]}**" for k, label in (("min_order", "Мин. заказ"), ("price_range", "Цена"),
+                              ("certificates", "Документы"), ("delivery_terms", "Доставка")) if advisor.is_known(r.get(k))]
+                if b2b_badges:
+                    left.info(" · ".join(b2b_badges), icon=":material/info:")
+                elif r.get("min_order"):  # карточку уже разбирали — условий в ней нет
+                    left.caption("Цена, мин. заказ и документы в карточке не указаны — уточните у поставщика")
 
-            # Контакты
-            if r["phones"] or r["emails"]:
-                contact_line = ""
-                if r["phones"]:
-                    contact_line += ":material/call: " + " · ".join(f"[{p}](tel:{p.replace(' ', '').replace('-', '')})" for p in r["phones"])
-                if r["emails"]:
-                    contact_line += (" · " if contact_line else "") + ":material/mail: " + " · ".join(f"[{e}](mailto:{e})" for e in r["emails"])
-                left.markdown(contact_line)
-            else:
-                left.caption("Контакты на сайте не указаны")
+                # Контакты
+                if r["phones"] or r["emails"]:
+                    contact_line = ""
+                    if r["phones"]:
+                        contact_line += ":material/call: " + " · ".join(f"[{p}](tel:{p.replace(' ', '').replace('-', '')})" for p in r["phones"])
+                    if r["emails"]:
+                        contact_line += (" · " if contact_line else "") + ":material/mail: " + " · ".join(f"[{e}](mailto:{e})" for e in r["emails"])
+                    left.markdown(contact_line)
+                else:
+                    left.caption("Контакты на сайте не указаны")
 
-            # Статус в CRM и заметки текущей организации
-            crm_status = r.get("user_status", "Не связывались")
-            crm_note = r.get("user_note", "")
-            badge_icon = STATUS_BADGES.get(crm_status, crm_status)
+                # Статус в CRM и заметки текущей организации
+                crm_status = r.get("user_status", "Не связывались")
+                crm_note = r.get("user_note", "")
+                badge_icon = STATUS_BADGES.get(crm_status, crm_status)
             
-            note_display = f"Статус: **{badge_icon}**"
-            if crm_note:
-                author_txt = f" *(автор: {r.get('user_note_author', 'Менеджер')})*"
-                note_display += f" · *«{crm_note}»*{author_txt}"
-            left.caption(note_display)
+                note_display = f"Статус: **{badge_icon}**"
+                if crm_note:
+                    author_txt = f" *(автор: {r.get('user_note_author', 'Менеджер')})*"
+                    note_display += f" · *«{crm_note}»*{author_txt}"
+                left.caption(note_display)
 
-            # Правая колонка: Оценка и действия
-            right.metric("Совпадение", f"{r['score']:.0%}", help="Насколько поставщик подходит под запрос, с учётом расстояния и контактов")
+                # Правая колонка: Оценка и действия
+                right.metric("Совпадение", f"{r['score']:.0%}", help="Насколько поставщик подходит под запрос, с учётом расстояния и контактов")
 
-            if right.button("Подробнее", icon=":material/open_in_full:", key=f"passport_btn_{r['id']}",
-                            use_container_width=True, help="Условия, ассортимент, контакты и заметки"):
-                show_b2b_passport_dialog(r["id"])
+                if right.button("Подробнее", icon=":material/open_in_full:", key=f"passport_btn_{r['id']}",
+                                use_container_width=True, help="Условия, ассортимент, контакты и заметки"):
+                    show_b2b_passport_dialog(r["id"])
 
-            # Поповер заметок с историей
-            with right.popover("Заметки", icon=":material/edit_note:"):
-                st.caption(r['name'][:40])
-                idx_cur = STATUS_OPTS.index(crm_status) if crm_status in STATUS_OPTS else 0
-                st.selectbox("Статус", STATUS_OPTS, index=idx_cur, key=f"c_st_{r['id']}")
-                st.text_input("Заметка", placeholder="Договорённость, имя менеджера, цены…", key=f"c_nt_{r['id']}")
+                # Поповер заметок с историей
+                with right.popover("Заметки", icon=":material/edit_note:"):
+                    st.caption(r['name'][:40])
+                    idx_cur = STATUS_OPTS.index(crm_status) if crm_status in STATUS_OPTS else 0
+                    st.selectbox("Статус", STATUS_OPTS, index=idx_cur, key=f"c_st_{r['id']}")
+                    st.text_input("Заметка", placeholder="Договорённость, имя менеджера, цены…", key=f"c_nt_{r['id']}")
                 
-                st.button("Сохранить", icon=":material/save:", key=f"c_btn_{r['id']}", on_click=save_crm,
-                          args=(r["id"], f"c_st_{r['id']}", f"c_nt_{r['id']}", crm_note, current_org, current_author))
+                    st.button("Сохранить", icon=":material/save:", key=f"c_btn_{r['id']}", on_click=save_crm,
+                              args=(r["id"], f"c_st_{r['id']}", f"c_nt_{r['id']}", crm_note, current_org, current_author))
 
-                # История изменений
-                history = db.get_note_history(con, r["id"], org_name=current_org)
-                if history:
-                    st.markdown("---")
-                    st.markdown("**История**")
-                    for h in history[:3]:
-                        st.caption(history_line(h, "%d.%m %H:%M"))
+                    # История изменений
+                    history = db.get_note_history(con, r["id"], org_name=current_org)
+                    if history:
+                        st.markdown("---")
+                        st.markdown("**История**")
+                        for h in history[:3]:
+                            st.caption(history_line(h, "%d.%m %H:%M"))
 
-            # состояние галочки берём из списка сравнения: его меняют и AI-отбор, и «Очистить список»
-            st.session_state[f"cmp{r['id']}"] = r["id"] in st.session_state.selected
-            right.checkbox("Сравнить", key=f"cmp{r['id']}", on_change=toggle_compare, args=(r["id"],))
+                # состояние галочки берём из списка сравнения: его меняют и AI-отбор, и «Очистить список»
+                st.session_state[f"cmp{r['id']}"] = r["id"] in st.session_state.selected
+                right.checkbox("Сравнить", key=f"cmp{r['id']}", on_change=toggle_compare, args=(r["id"],))
 
-    if pages > 1:
-        st.number_input(f"Страница (всего {pages})", 1, pages, 1, key=page_key, width=200)
+        if pages > 1:
+            st.number_input(f"Страница (всего {pages})", 1, pages, 1, key=page_key, width=200)
 
 
 # --- 4. Вкладка Сравнение (Decision Copilot) ---
@@ -657,11 +669,11 @@ with tab_cmp:
                 "Город": s["city"] or "—",
                 "Расстояние": dist_val,
                 "Товар": s["subcategory"] or "—",
-                "Мин. заказ": s.get("min_order") or "По запросу",
-                "Цена": s.get("price_range") or "Оптовый прайс по запросу",
-                "Сертификаты": s.get("certificates") or "Декларация ЕАС, ГОСТ",
-                "Доставка": s.get("delivery_terms") or "ТК по РФ, самовывоз",
-                "Куда доставляют": s.get("region_scope") or "Вся Россия",
+                "Мин. заказ": s.get("min_order") or advisor.NOT_SPECIFIED,
+                "Цена": s.get("price_range") or advisor.NOT_SPECIFIED,
+                "Сертификаты": s.get("certificates") or advisor.NOT_SPECIFIED,
+                "Доставка": s.get("delivery_terms") or advisor.NOT_SPECIFIED,
+                "Куда доставляют": s.get("region_scope") or advisor.NOT_SPECIFIED,
                 "Товаров": str(s["products_count"] or "—"),
                 "Телефоны": ", ".join(s["phones"]) or "—",
                 "Email": ", ".join(s["emails"]) or "—",

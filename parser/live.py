@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import db
 import productcenter_parser as pc
+import ranking
 
 CONTACTS_TTL = 14 * 24 * 3600  # контакты считаем свежими две недели
 LIVE_TIMEOUT = 8               # живые запросы не должны вешать интерфейс
@@ -120,6 +121,8 @@ def search_live(con, query: str, pages: int = 2, city: str | None = None, found:
             if not items:
                 break
             for it in items:
+                if ranking.not_food(it.get("subcategory")):
+                    continue  # сайт ищет по словам: на «айфон» отдаёт чехлы, на «мёд» — мыло с мёдом
                 new += db.upsert(con, it)
                 if not broad:  # по главному слову или с городом выдача слишком широкая — не считаем это попаданием
                     slugs.add(it["slug"])

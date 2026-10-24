@@ -116,13 +116,19 @@ def fetch_full_page_text(url: str) -> str:
     return ""
 
 
-DEFAULT_EXTRA = {
-    "min_order": "По запросу (от 1 коробки)",
-    "price_range": "Оптовый прайс по запросу",
-    "certificates": "Декларация ЕАС, ГОСТ",
-    "delivery_terms": "ТК по РФ, самовывоз",
-    "region_scope": "Вся Россия",
-}
+NOT_SPECIFIED = "не указано"
+# чего нет в тексте карточки, того не знаем: придуманные «ГОСТ, от 20 кг, 350 ₽/кг» закупщик примет за факт
+DEFAULT_EXTRA = {k: NOT_SPECIFIED for k in ("min_order", "price_range", "certificates", "delivery_terms", "region_scope")}
+
+
+def is_known(v) -> bool:
+    return bool(v) and str(v).strip().lower() not in (NOT_SPECIFIED, "—", "-", "нет данных", "по запросу")
+
+
+STRICT_RULES = """Правила:
+- Бери только то, что прямо написано в тексте. Ничего не оценивай и не додумывай по «типичным» значениям.
+- Если параметра в тексте нет — пиши ровно «не указано».
+- Не называй ГОСТ, ТУ, сертификаты, цены и объёмы, которых нет в тексте."""
 
 
 def extract_extra_info(client: OpenAI | None, supplier: dict) -> dict:
@@ -130,13 +136,15 @@ def extract_extra_info(client: OpenAI | None, supplier: dict) -> dict:
     if not client:
         return dict(DEFAULT_EXTRA)
 
-    desc = (supplier.get("description") or "")[:250].replace("\n", " ")
+    desc = (supplier.get("description") or "")[:1500].replace("\n", " ")
     sub = supplier.get("subcategory") or "Продукты питания"
     name = supplier.get("name") or "Производитель"
     city = supplier.get("city") or "РФ"
 
     prompt = f"""Ты ведущий эксперт по B2B-закупкам пищевой продукции.
-Для компании определи или реалистично оцени ключевые оптовые условия:
+Выпиши из карточки компании оптовые условия, которые в ней указаны.
+{STRICT_RULES}
+
 Компания: {name}
 Товарная группа: {sub}
 Город: {city}
@@ -144,11 +152,11 @@ def extract_extra_info(client: OpenAI | None, supplier: dict) -> dict:
 
 Верни строго JSON-объект:
 {{
-  "min_order": "минимальный объем заказа (напр. от 20 кг / от 1 коробки / от 100 кг / от 50 000 руб)",
-  "price_range": "примерный ценовой ориентир (напр. 350-500 руб/кг или опт по запросу)",
-  "certificates": "сертификаты и документы (напр. ГОСТ, ХАССП, Декларация ЕАС, ФГИС Меркурий)",
-  "delivery_terms": "условия доставки (напр. ТК рефрижератор, самовывоз, доставка по РФ)",
-  "region_scope": "география поставок (напр. Вся Россия, ЦФО, Региональный)"
+  "min_order": "минимальный заказ из текста или «не указано»",
+  "price_range": "цена из текста или «не указано»",
+  "certificates": "документы и сертификаты из текста или «не указано»",
+  "delivery_terms": "условия доставки из текста или «не указано»",
+  "region_scope": "география поставок из текста или «не указано»"
 }}
 Только валидный JSON, без markdown:"""
 
@@ -156,7 +164,7 @@ def extract_extra_info(client: OpenAI | None, supplier: dict) -> dict:
         data = parse_json_from_llm(call_llm(client, prompt, max_tokens=250))
         if isinstance(data, dict):
             # без min_order поставщик считается необогащённым и LLM вызывается на каждом клике
-            return {**DEFAULT_EXTRA, **{k: v for k, v in data.items() if k in DEFAULT_EXTRA and v}}
+            return {**DEFAULT_EXTRA, **{k: str(v).strip() for k, v in data.items() if k in DEFAULT_EXTRA and v}}
     except Exception as e:
         print(f"Error enriching {name}: {e}")
 
@@ -175,7 +183,7 @@ def enrich_suppliers_extra(con, suppliers_list: list[dict], max_workers: int = 4
             return s, extract_extra_info(client, s)
         except Exception as e:
             print(f"Error enriching {s.get('name')}: {e}")
-            return s, dict(DEFAULT_EXTRA, min_order="По запросу")
+            return s, dict(DEFAULT_EXTRA)
 
     try:
         with ThreadPoolExecutor(max_workers=min(len(todo), max_workers)) as executor:
@@ -191,11 +199,36 @@ def enrich_suppliers_extra(con, suppliers_list: list[dict], max_workers: int = 4
         print(f"Error in enrich_suppliers_extra executor: {e}")
 
 
+def _brand(s: dict) -> str:
+    """«Группа компаний «Вамин Татарстан»» и «Производитель … «ВАМИН»» -> «вамин»."""
+    name = s.get("name") or ""
+    m = re.search(r"[«\"]([^»\"]+)", name)
+    words = re.findall(r"[а-яёa-z0-9]+", (m.group(1) if m else name).lower())
+    return words[0] if words else ""
+
+
+def same_company(a: dict, b: dict) -> bool:
+    """Две карточки одной компании: общий телефон или почта, либо один бренд в одном городе."""
+    phones = lambda s: {re.sub(r"\D", "", p)[-10:] for p in s.get("phones") or []}
+    if phones(a) & phones(b) or set(a.get("emails") or []) & set(b.get("emails") or []):
+        return True
+    return bool(_brand(a)) and _brand(a) == _brand(b) and a.get("city") == b.get("city")
+
+
+def dedupe(suppliers: list[dict]) -> list[dict]:
+    out = []
+    for s in suppliers:
+        if not any(same_company(s, o) for o in out):
+            out.append(s)
+    return out
+
+
 def recommend_best_supplier(suppliers: list[dict], query: str, user_city: str | None) -> dict:
     """Генерирует интеллектуальную рекомендацию и скрипт первого контакта."""
     client = get_client()
     if not suppliers:
         return {}
+    suppliers = dedupe(suppliers)  # иначе одна компания становится и основным, и запасным вариантом
 
     candidates_info = ""
     for i, s in enumerate(suppliers, 1):
@@ -208,11 +241,11 @@ def recommend_best_supplier(suppliers: list[dict], query: str, user_city: str | 
    Специализация: {s.get('subcategory') or '—'}
    Товаров в каталоге: {s.get('products_count') or '—'}
    Контакты: тел: {phones_str}, email: {emails_str}
-   Мин. заказ: {s.get('min_order') or 'по запросу'}
-   Ориентир цены: {s.get('price_range') or 'по запросу'}
-   Сертификаты: {s.get('certificates') or 'по запросу'}
-   Доставка: {s.get('delivery_terms') or 'по запросу'}
-   Описание: {(s.get('description') or '')[:200]}
+   Мин. заказ: {s.get('min_order') or NOT_SPECIFIED}
+   Цена: {s.get('price_range') or NOT_SPECIFIED}
+   Сертификаты: {s.get('certificates') or NOT_SPECIFIED}
+   Доставка: {s.get('delivery_terms') or NOT_SPECIFIED}
+   Описание: {(s.get('description') or '')[:400]}
 """
 
     prompt = f"""Ты ведущий эксперт по B2B-закупкам продуктов питания (Procurement Specialist / Food Buyer).
@@ -228,6 +261,11 @@ def recommend_best_supplier(suppliers: list[dict], query: str, user_city: str | 
 - Условия поставок (минимальная партия, риски первой сделки).
 
 Помоги закупщику принять взвешенное решение и подготовь проект первого обращения.
+Правила:
+- Опирайся только на данные карточек выше. Не приписывай компании товары, документы, ГОСТы, цены и объёмы,
+  которых в её карточке нет. Если нужный товар в карточке не назван прямо — так и скажи и сделай это риском.
+- Покупатель находится в «{user_city or 'не указан'}»: про логистику и доставку говори относительно этого города.
+- Альтернатива — другая компания, не та же под другим названием.
 Верни ответ СТРОГО в формате JSON:
 {{
   "best_choice": {{
@@ -282,7 +320,7 @@ def select_candidates_via_llm(candidates: list[dict], query: str, user_city: str
         return {"selected_ids": [], "summary": "Список выдачи пуст."}
 
     if not client or not query:
-        top_ids = [c["id"] for c in candidates[:3]]
+        top_ids = [c["id"] for c in dedupe(candidates)[:3]]
         return {"selected_ids": top_ids, "summary": "Отобраны топ-3 кандидата с наивысшим баллом ранжирования."}
 
     candidates_text = ""
@@ -305,14 +343,15 @@ def select_candidates_via_llm(candidates: list[dict], query: str, user_city: str
 1. Отсеять неподходящие карточки:
    - компании, которые продают готовые ресторанные блюда/пиццу вместо оптового сырья;
    - компании, продающие упаковку, добавки или корма;
-   - компании, где совпало только второстепенное слово, но профиль совсем другой.
+   - компании, где совпало только второстепенное слово, но профиль совсем другой;
+   - повторные карточки одной и той же компании (берёшь одну).
 2. Отобрать от 2 до 5 САМЫХ ПОДХОДЯЩИХ поставщиков/производителей целевого товара для детального сравнения.
    Постарайся включить сильных кандидатов (например, локального производителя поближе к {user_city or 'клиенту'}, крупный завод или узкоспециализированную компанию).
 
 Верни строго JSON:
 {{
   "selected_ids": [числовой_id1, числовой_id2, ...],
-  "summary": "Краткое понятное объяснение (1-2 предложения), по какому принципу и почему отобраны именно эти компании"
+  "summary": "1-2 предложения, по какому принципу отобраны компании; только факты из списка выше"
 }}
 Ответ ТОЛЬКО валидный JSON:"""
 
@@ -322,6 +361,7 @@ def select_candidates_via_llm(candidates: list[dict], query: str, user_city: str
         if m:
             data = json.loads(m.group(0))
             valid_ids = {c["id"] for c in candidates}
+            by_id = {c["id"]: c for c in candidates}
             raw_chosen = data.get("selected_ids", [])
             chosen = []
             for cid in raw_chosen:  # модель может вернуть id строкой: "123" -> 123
@@ -329,25 +369,23 @@ def select_candidates_via_llm(candidates: list[dict], query: str, user_city: str
                     cid = int(cid)
                 except (TypeError, ValueError):
                     continue
-                if cid in valid_ids and cid not in chosen:
+                if cid in valid_ids and cid not in chosen and not any(same_company(by_id[cid], by_id[o]) for o in chosen):
                     chosen.append(cid)
             if not chosen:
                 return {
-                    "selected_ids": [c["id"] for c in candidates[:3]],
-                    "summary": "AI не нашёл в топе выдачи точных совпадений — в сравнение добавлены 3 лучших по рейтингу. "
-                               + (data.get("summary") or ""),
+                    "selected_ids": [c["id"] for c in dedupe(candidates)[:3]],
+                    "summary": "AI не нашёл в топе выдачи точных совпадений — в сравнение добавлены 3 лучших по рейтингу.",
                 }
-            # пользователь не видит внутренних id — в пояснении заменяем их названиями
-            names = {c["id"]: c.get("name") or "—" for c in candidates}
-            summary = data.get("summary") or "Отобраны наиболее релевантные поставщики через AI."
-            summary = re.sub(r"\b(?:ID:?\s*)?(\d{3,})\b",
-                             lambda m: names[int(m.group(1))] if int(m.group(1)) in names else m.group(0), summary)
+            # пояснение собираем из карточек, а не из текста модели: она приписывает компаниям чужие товары
+            summary = "Отобраны: " + "; ".join(
+                f"{by_id[c].get('name') or '—'}" + (f" ({by_id[c]['city']})" if by_id[c].get("city") else "")
+                for c in chosen) + "."
             return {"selected_ids": chosen, "summary": summary}
     except Exception as e:
         print(f"Error in select_candidates_via_llm: {e}")
 
     return {
-        "selected_ids": [c["id"] for c in candidates[:3]],
+        "selected_ids": [c["id"] for c in dedupe(candidates)[:3]],
         "summary": "Отобраны 3 лучших поставщика по общему баллу релевантности."
     }
 
@@ -400,29 +438,24 @@ def get_or_create_b2b_passport(con, supplier: dict, force_refresh: bool = False)
 
     default_passport = {
         "commercial_terms": {
-            "min_order": supplier.get("min_order") or "По запросу (от 1 кор./паллеты)",
-            "packaging": "Стандартная оптовая тара производителя",
-            "price_estimate": supplier.get("price_range") or "Оптовый прайс по запросу",
-            "payment_terms": "Безналичный расчет с НДС / предоплата"
+            "min_order": supplier.get("min_order") or NOT_SPECIFIED,
+            "packaging": NOT_SPECIFIED,
+            "price_estimate": supplier.get("price_range") or NOT_SPECIFIED,
+            "payment_terms": NOT_SPECIFIED
         },
         "compliance_and_quality": {
-            "standards": "ГОСТ / ТУ производителя",
-            "certifications": supplier.get("certificates") or "Декларация ЕАС, ХАССП, ФГИС «Меркурий»",
-            "shelf_life": "В соответствии с тех. регламентом на продукцию",
-            "product_specs": f"Продукция категории: {sub}"
+            "standards": NOT_SPECIFIED,
+            "certifications": supplier.get("certificates") or NOT_SPECIFIED,
+            "shelf_life": NOT_SPECIFIED,
+            "product_specs": f"Специализация на сайте: {sub}"
         },
         "logistics": {
-            "delivery_type": supplier.get("delivery_terms") or "Транспортные компании по РФ, самовывоз со склада",
-            "storage_temp": "Соответствует категории товара"
+            "delivery_type": supplier.get("delivery_terms") or NOT_SPECIFIED,
+            "storage_temp": NOT_SPECIFIED
         },
         "buyer_verdict": {
-            "green_flags": [
-                f"Прямой производитель ({city})",
-                f"Подтвержденный профиль: {sub}"
-            ],
-            "red_flags": [
-                "Необходимо запросить свежий каталог и оптовый прайс-лист перед заказом"
-            ],
+            "green_flags": [f"Специализация на сайте каталога: {sub}"],
+            "red_flags": ["Условия поставки в карточке не указаны — запросите прайс и документы до заказа"],
             "negotiation_questions": [
                 "Каковы минимальный объем первой отгрузки и условия доставки?",
                 "Предоставляете ли ветеринарные свидетельства во ФГИС «Меркурий»?",
@@ -458,11 +491,11 @@ def get_or_create_b2b_passport(con, supplier: dict, force_refresh: bool = False)
 - buyer_verdict.red_flags — 1-3 риска, которые нужно проверить закупщику;
 - buyer_verdict.negotiation_questions — 3 конкретных вопроса менеджеру на первый созвон.
 
-Каждое значение — строка на русском (в buyer_verdict — списки строк) с конкретным фактом для этой
-компании и товара, а не название поля и не пример формата.
-Опирайся на текст описания. Если параметра там нет, всё равно напиши конкретное типичное для этой
-товарной группы значение (например, срок годности в сутках, фасовку в кг, температуру в °C)
-и добавь в конце « — оценка, уточнить». Не выдумывай номера ГОСТ, которых нет в тексте.
+Каждое значение — строка на русском (в buyer_verdict — списки строк) с фактом из текста для этой
+компании, а не название поля и не пример формата.
+{STRICT_RULES}
+- green_flags — только подтверждённые текстом факты; red_flags — в том числе чего не хватает в карточке
+  (нет цен, нет документов); вопросы — о том, что в карточке не указано.
 
 Верни ТОЛЬКО валидный JSON такой структуры:
 {{
@@ -492,7 +525,7 @@ def get_or_create_b2b_passport(con, supplier: dict, force_refresh: bool = False)
             # пустое поле дало бы «—» в паспорте и пустой min_order, из-за которого сравнение заново дёргает LLM
             for k, v in default_passport[section].items():
                 val = passport_data[section].get(k)
-                if not val or (isinstance(val, str) and not re.sub(r"[\W_]|оценка|уточнить", "", val, flags=re.I)):
+                if not val or (isinstance(val, str) and not re.sub(r"[\W_]", "", val)):
                     passport_data[section][k] = v
 
     # Сохраняем в кэш БД
@@ -507,7 +540,7 @@ def get_or_create_b2b_passport(con, supplier: dict, force_refresh: bool = False)
         "price_range": comm.get("price_estimate"),
         "certificates": compl.get("certifications"),
         "delivery_terms": logi.get("delivery_type"),
-        "region_scope": "Вся Россия"
+        "region_scope": supplier.get("region_scope") or NOT_SPECIFIED,
     }
     db.save_extra(con, sid, extra_sync)
 

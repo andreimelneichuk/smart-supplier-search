@@ -14,14 +14,29 @@ STOPWORDS = {
 # веса полей при поиске слова
 W_NAME, W_SUB, W_CAT, W_DESC = 1.0, 0.9, 0.6, 0.5
 # веса итоговой оценки
-WEIGHTS = {"relevance": 0.40, "geo": 0.35, "completeness": 0.15, "size": 0.10}  # подобраны массовым тестом: запросы × города
+WEIGHTS = {"relevance": 0.40, "geo": 0.40, "completeness": 0.10, "size": 0.10}  # город в запросе должен заметно поднимать местных
 MIN_RELEVANCE = 0.30
 GEO_SCALE_KM = 400  # гео-оценка = exp(-(расстояние - до ближайшего) / 400 км): ближайший → 1.0, +300 км → 0.47
-GEO_REL_GATE = 0.6  # с какой релевантности близость учитывается в полную силу
+GEO_REL_GATE = 0.5  # с какой релевантности близость учитывается в полную силу
 NON_FOOD_FACTOR = 0.3  # непищевые карточки без разметки is_food: оборудование, тара, инвентарь
 NON_FOOD_HEADS = {"оборудование", "грунт", "удобрение", "нож", "лоток", "ящик", "камера", "станок", "машина",
                   "аппарат", "линия", "холодильник", "инвентарь", "посуда", "пленка", "пакет", "коробка",
                   "этикетка", "семя", "рассада", "саженец", "техника", "установка", "печь"}
+# совсем не food-направление: такие карточки не берём из поиска на сайте и не показываем,
+# если их не искали явно. Упаковка и пищевое оборудование сюда не входят — их ищут закупщики
+NOT_FOOD_HEADS = {
+    "чехол", "телефон", "смартфон", "айфон", "наушник", "кабель", "электрокабель", "лампа", "фитосветильник",
+    "пылесос", "реле", "электростанция", "электробогреватель", "котел",
+    "шампунь", "скраб", "маска", "мыло", "косметика", "антисептик", "салфетка", "бомбочка", "мочалка", "гель",
+    "платье", "белье", "плед", "одежда", "обувь", "кресло", "кровать", "прихожая", "мебель", "стол", "абажур",
+    "игрушка", "конструктор", "лото", "песочница", "панель", "развлечение", "сувенир", "открытка", "муляж",
+    "иконопись", "композиция", "вазочка", "кружка", "ласт", "лодка", "удилище", "приманка", "мангал",
+    "штукатурка", "плитка", "щебень", "крошка", "огнеупор", "эковата", "окно", "лестница", "труба", "водопровод",
+    "покрытие", "здание", "понтон", "конструкция", "мел", "известь", "натрий", "вещество", "веревка",
+    "саженец", "растение", "туя", "горшок", "клумба", "грунт", "мульча", "вермикулит", "полив", "кассета",
+    "регулятор", "ножницы", "черви", "экскаватор", "мотовездеход", "погрузчик", "культиватор", "шкурка",
+    "жиросжигатель", "хозтовары",
+}
 DERIVED_FACTOR = 0.6  # те же «корм, приправа, упаковка, блюдо», что и в рубрике llm_rerank
 DERIVED_HEADS = {"снек", "снэк", "чипсы", "корм", "консервы", "паштет", "приправа", "специя", "соус",
                  "добавка", "ароматизатор", "упаковка", "тара"}
@@ -139,6 +154,12 @@ def non_food_clash(s: dict, query_lemmas: set) -> bool:
     return head in NON_FOOD_HEADS and head not in query_lemmas
 
 
+def not_food(text: str | None) -> bool:
+    """Главное слово товара — явно не еда и не для food-бизнеса: «Чехлы для iPhone», «Постельное бельё»."""
+    head = next((l for l, pos, _ in search.content_lemmas(text) if pos == "NOUN"), None)
+    return head in NOT_FOOD_HEADS
+
+
 def derived_clash(s: dict, query_lemmas: set) -> bool:
     """Специализация компании — производный продукт, которого нет в запросе («Мясные снеки» на «мясо индейки»)."""
     sub = set(bm25.tokenize_lemmas(f"{s.get('subcategory') or ''} {s.get('name') or ''}"))  # «Производитель корма…»
@@ -235,7 +256,8 @@ def rank(suppliers: list[dict], parsed: dict, cat_names: dict, coords=None, mode
     kept = []
     for i, s in enumerate(suppliers):
         # Отсекаем непищевую продукцию (мыло, упаковка, косметика, оборудование), если она размечена LLM
-        if s.get("is_food") == 0:
+        if s.get("is_food") == 0 or (s.get("is_food") is None and not_food(s.get("subcategory"))
+                                      and not query_lemmas & set(bm25.tokenize_lemmas(s.get("subcategory")))):
             continue
         rel = float(rel_scores[i])
         if head_floor and rel < HEAD_ONLY_FACTOR:
@@ -269,7 +291,10 @@ def rank(suppliers: list[dict], parsed: dict, cat_names: dict, coords=None, mode
         geo_score = 0.0 if dist is None else math.exp(-(dist - nearest) / GEO_SCALE_KM)
         # близость помогает только подходящим по товару: иначе соседний завод с чужим товаром обгоняет нужный
         geo_score *= min(1.0, rel / GEO_REL_GATE)
-        comp = (0.5 if s.get("phones") else 0) + (0.5 if s.get("emails") else 0)
+        if s.get("contacts_at") or s.get("phones") or s.get("emails"):
+            comp = (0.5 if s.get("phones") else 0) + (0.5 if s.get("emails") else 0)
+        else:
+            comp = 0.5  # контакты ещё не загружали (подтягиваются только для карточек на экране) — не штрафуем
         size = math.log1p(s.get("products_count") or 0) / math.log1p(max_goods)
         parts = {"relevance": rel, "geo": geo_score, "completeness": comp, "size": size}
         w = dict(WEIGHTS)
@@ -285,3 +310,20 @@ def rank(suppliers: list[dict], parsed: dict, cat_names: dict, coords=None, mode
         })
     return sorted(out, key=lambda r: r["score"], reverse=True)
 
+
+
+def correct_terms(terms: list[str], suppliers: list[dict]) -> list[str] | None:
+    """Исправляет опечатки по словарю товаров базы: «мацарела» -> «моцарелла». None — исправлять нечего."""
+    import difflib
+    from collections import Counter
+    vocab = Counter(t for s in suppliers
+                    for t in tokens(f"{s.get('subcategory') or ''} {' '.join(s.get('primary_products') or [])}")
+                    if len(t) >= 4)
+    stems = {stem(w) for w in vocab}
+    fixed = []
+    for t in terms:
+        near = [] if len(t) < 4 or stem(t) in stems else difflib.get_close_matches(t, list(vocab), n=5, cutoff=0.75)
+        # сначала похожесть, при равной — частота: «мацарела» ближе к «моцарелла», чем к частому «мармелад»
+        score = lambda w: (round(difflib.SequenceMatcher(None, t, w).ratio(), 2), vocab[w])
+        fixed.append(max(near, key=score) if near else t)
+    return fixed if fixed != terms else None
