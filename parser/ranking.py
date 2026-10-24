@@ -2,6 +2,7 @@
 import math
 import re
 
+import bm25
 import geo
 import search
 
@@ -17,6 +18,22 @@ WEIGHTS = {"relevance": 0.40, "geo": 0.35, "completeness": 0.15, "size": 0.10}  
 MIN_RELEVANCE = 0.30
 GEO_SCALE_KM = 400  # гео-оценка = exp(-(расстояние - до ближайшего) / 400 км): ближайший → 1.0, +300 км → 0.47
 GEO_REL_GATE = 0.6  # с какой релевантности близость учитывается в полную силу
+NON_FOOD_FACTOR = 0.3  # непищевые карточки без разметки is_food: оборудование, тара, инвентарь
+NON_FOOD_HEADS = {"оборудование", "грунт", "удобрение", "нож", "лоток", "ящик", "камера", "станок", "машина",
+                  "аппарат", "линия", "холодильник", "инвентарь", "посуда", "пленка", "пакет", "коробка",
+                  "этикетка", "семя", "рассада", "саженец", "техника", "установка", "печь"}
+DERIVED_FACTOR = 0.6  # те же «корм, приправа, упаковка, блюдо», что и в рубрике llm_rerank
+DERIVED_HEADS = {"снек", "снэк", "чипсы", "корм", "консервы", "паштет", "приправа", "специя", "соус",
+                 "добавка", "ароматизатор", "упаковка", "тара"}
+SECONDARY_FACTOR = 0.7  # искомый товар не в специализации/названии компании, а только в описании
+PARENT_REL = 0.45       # специализация — родительская категория из справочника (птица для индейки)
+APPOSITION_REL = 0.35   # «сыр моцарелла» → просто сыроварня: слабее, специалисты по моцарелле должны быть выше
+# родительские категории для частых запросов, где их нельзя вывести из самого запроса
+PARENT_PRODUCT = {
+    "индейка": "птица", "курица": "птица", "цыпленок": "птица", "бройлер": "птица", "утка": "птица",
+    "гусь": "птица", "перепел": "птица", "говядина": "мясо", "свинина": "мясо", "баранина": "мясо",
+    "телятина": "мясо", "конина": "мясо", "крольчатина": "мясо",
+}
 HEAD_ONLY_FACTOR = 0.5  # запрос «товар + признак», а у поставщика совпал только товар
 MODIFIER_POS = {"ADJF", "ADJS", "PRTF", "PRTS"}
 SITE_REL_BONUS = 0.15  # компанию выдал поиск сайта по всей фразе запроса — небольшая прибавка к релевантности
@@ -116,6 +133,26 @@ def relevance(s: dict, terms: list[str], cat_names: dict) -> float:
     return search.lexical_score(s, search.query_lemmas(terms), cat_names)
 
 
+def non_food_clash(s: dict, query_lemmas: set) -> bool:
+    """Главное слово специализации — непищевой товар (оборудование, тара, грунт), которого нет в запросе."""
+    head = next((l for l, pos, _ in search.content_lemmas(s.get("subcategory")) if pos == "NOUN"), None)
+    return head in NON_FOOD_HEADS and head not in query_lemmas
+
+
+def derived_clash(s: dict, query_lemmas: set) -> bool:
+    """Специализация компании — производный продукт, которого нет в запросе («Мясные снеки» на «мясо индейки»)."""
+    sub = set(bm25.tokenize_lemmas(f"{s.get('subcategory') or ''} {s.get('name') or ''}"))  # «Производитель корма…»
+    return bool(sub & DERIVED_HEADS) and not (sub & DERIVED_HEADS & query_lemmas)
+
+
+def is_main_product(s: dict, lemma: str, with_name: bool = True) -> bool:
+    """Товар — в специализации, названии компании или ключевых словах каталога, а не только в описании."""
+    fields = (s.get("subcategory"), s.get("name") if with_name else None, s.get("search_keywords"),
+              " ".join(s.get("primary_products") or []))
+    text = " ".join(str(x) for x in fields if x)
+    return any(t == lemma or bm25.is_compound_of(t, lemma) for t in bm25.tokenize_lemmas(text))
+
+
 def distance_to(s: dict, city: str | None, user_xy, coords) -> float | None:
     """Расстояние от поставщика до города покупателя, км (None — город не задан или координат нет)."""
     if not city:
@@ -178,13 +215,22 @@ def rank(suppliers: list[dict], parsed: dict, cat_names: dict, coords=None, mode
     # таким почти ноль и они отсекаются порогом. Если остальные слова — только признаки (прилагательные),
     # даём производителям главного товара не меньше HEAD_ONLY_FACTOR от их совпадения по главному слову.
     # «мясо индейки», «сыр моцарелла» не трогаем: там второе слово и есть товар.
-    head_floor = None
-    if len(terms) > 1 and model != "llm":
+    head_floor = product = parent = None
+    parent_rel = PARENT_REL
+    if terms and model != "llm":
         lem = search.content_lemmas(" ".join(terms))
-        nouns = [l for l, pos, _ in lem if pos == "NOUN"]
-        if len(nouns) == 1 and all(pos in MODIFIER_POS for l, pos, _ in lem if l != nouns[0]):
-            head_floor = nouns[0]
+        nouns = [(l, role) for l, pos, role in lem if pos == "NOUN"]
+        if len(terms) > 1 and len(nouns) == 1 and all(pos in MODIFIER_POS for l, pos, _ in lem if l != nouns[0][0]):
+            head_floor = nouns[0][0]
+        # искомый товар — последнее существительное: «мясо ИНДЕЙКИ», «сыр МОЦАРЕЛЛА», «ХЛЕБ ржаной»
+        product = nouns[-1][0] if nouns else None
+        # родительская категория: «индейка» → «птица»; «сыр моцарелла» → «сыр» (приложение, не родительный падеж)
+        parent = PARENT_PRODUCT.get(product) if product else None
+        parent_rel = PARENT_REL
+        if not parent and len(nouns) > 1 and nouns[-1][1] != "gen":
+            parent, parent_rel = nouns[0][0], APPOSITION_REL
 
+    query_lemmas = set(bm25.tokenize_lemmas(" ".join(terms)))
     site_ids = parsed.get("site_ids") or set()
     kept = []
     for i, s in enumerate(suppliers):
@@ -194,7 +240,22 @@ def rank(suppliers: list[dict], parsed: dict, cat_names: dict, coords=None, mode
         rel = float(rel_scores[i])
         if head_floor and rel < HEAD_ONLY_FACTOR:
             rel = max(rel, HEAD_ONLY_FACTOR * search.lexical_score(s, [head_floor], cat_names))
-        if s["id"] in site_ids and rel > 0:
+        if non_food_clash(s, query_lemmas):
+            # «Овощные грунты», «Ножи для резки овощей», «Лотки для овощей» по запросу «овощи замороженные»
+            rel *= NON_FOOD_FACTOR
+        derived = derived_clash(s, query_lemmas)
+        if derived:
+            # специализация — производный продукт (снеки, корм, консервы, соус), а искали само сырьё:
+            # «чипсы из мяса индейки» — не поставщик мяса индейки
+            rel *= DERIVED_FACTOR
+        if product and not is_main_product(s, product):
+            # товар есть только в описании, а основная специализация другая: консервный завод, у которого
+            # среди прочего есть хлеб, не должен стоять наравне с хлебозаводами
+            rel *= SECONDARY_FACTOR
+            # по специализации, а не по названию: «Птицефабрика» с товаром «Яйцо куриное» индейку не продаёт
+            if parent and is_main_product(s, parent, with_name=False):
+                rel = max(rel, parent_rel)  # птицефабрика по запросу «мясо индейки»
+        if s["id"] in site_ids and rel > 0 and not derived:  # сайт тоже ищет по словам и путает снеки с мясом
             rel = min(1.0, rel + SITE_REL_BONUS)
         if rel < min_gate:
             continue
