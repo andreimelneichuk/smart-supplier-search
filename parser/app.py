@@ -1,17 +1,26 @@
 """Streamlit-интерфейс каталога поставщиков. Запуск: streamlit run parser/app.py"""
+import logging
+import sqlite3
 import time
 from datetime import datetime
 import streamlit as st
 
-import cross_encoder
 import dbstats
 import db
 import live
 import productcenter_parser as pc
 import geo
 import ranking
-import search
 import advisor
+
+import requests
+from openai import OpenAIError
+
+log = logging.getLogger(__name__)
+# сбой модели ранжирования: onnxruntime/numpy бросают RuntimeError/ValueError, нет файла модели — OSError
+MODEL_ERRORS = (OSError, RuntimeError, ValueError, ImportError, MemoryError)
+# сбой разбора страницы сайта: сеть или изменившаяся верстка
+SITE_ERRORS = (requests.RequestException, AttributeError, KeyError, ValueError)
 
 PAGE_SIZE = 10
 
@@ -33,21 +42,17 @@ def get_con():
     return con
 
 
-@st.cache_resource(show_spinner="Загружаю модели поиска (при первом запуске это может занять минуту)…")
-def load_models():
-    # эмбеддинги и cross-encoder скачиваются при первом обращении: грузим их один раз на процесс, а не на первый поиск
-    search._get_model()
-    cross_encoder.get_reranker()
-    return True
-
-
 @st.cache_data(ttl=3600, show_spinner=False)
 def db_freshness():
     return dbstats.coverage(db.connect())[1]
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def field_coverage():
+    return dbstats.coverage(db.connect())[0]
+
+
 con = get_con()
-load_models()
 st.session_state.setdefault("selected", set())
 st.session_state.setdefault("live_done", set())
 st.session_state.setdefault("contacts_tried", set())  # кому уже пытались подтянуть контакты в этой сессии
@@ -136,7 +141,9 @@ with st.sidebar:
     st.divider()
 
     # выбор модели ранжирования убран из интерфейса: обычному пользователю он ничего не говорит
-    selected_model = "bm25_cross"
+    # cross-encoder и эмбеддинги в облаке не используются: на отложенном наборе они не дали прироста качества,
+    # а модели не помещались в лимит памяти Streamlit Cloud
+    selected_model = "bm25"
 
     st.header(":material/filter_alt: Фильтры")
     # Получаем поставщиков для текущей организации
@@ -205,18 +212,17 @@ LOCAL_REL = ranking.STRONG_REL
 def run_ranking(rows=None):
     rows = rows if rows is not None else db.all_suppliers(con, org_name=current_org)
     failed = st.session_state.setdefault("rank_failed_at", {})
-    # LLM без ключа / лимит API / cross-encoder не скачался — не роняем страницу, а спускаемся до BM25
-    for model in dict.fromkeys([selected_model, "bm25_cross", "bm25"]):
+    for model in dict.fromkeys([selected_model, "bm25"]):
         if model != "bm25" and time.time() - failed.get(model, 0) < RANK_RETRY_SEC:
             continue
         try:
-            # на холодном старте облака модели поиска скачиваются и грузятся 1–2 минуты — без подписи это пустой экран
-            with st.spinner("Ищу поставщиков… При первом запуске сервис загружает модели поиска, это до пары минут."):
+            with st.spinner("Ищу поставщиков…"):
                 res = ranking.rank(rows, parsed, pc.CATEGORIES, coords, model=model)
-        except Exception as e:
+        except MODEL_ERRORS as e:
             if model == "bm25":
                 raise
-            print(f"Ranking model {model} failed: {e}")
+            log.warning("ranking model %s failed: %s", model, e)
+            st.toast(f"Модель «{model}» не ответила ({type(e).__name__}) — ищу по ключевым словам.", icon=":material/warning:")
             failed[model] = time.time()
             continue
         return res
@@ -389,6 +395,10 @@ def show_b2b_passport_dialog(item_id: int):
     ])
 
     with t_comm:
+        cov = field_coverage()
+        st.caption(":material/info: Цена и минимальный заказ в каталоге почти никогда не пишутся: в тексте карточек они есть у "
+                   f"{cov['упомянута цена (текст карточки)']:.0%} и {cov['упомянут минимальный заказ (текст)']:.0%} "
+                   "производителей. Обычно здесь будет «не указано» — эти условия уточняются при первом контакте.")
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("##### Минимальный заказ")
@@ -424,8 +434,10 @@ def show_b2b_passport_dialog(item_id: int):
         with st.spinner("Загружаю товары с сайта производителя…"):
             try:
                 goods = load_products(item["url"], item.get("slug") or "")
-            except Exception as e:
-                print(f"Error loading products: {e}")
+            except SITE_ERRORS as e:
+                log.warning("products for %s: %s", item.get("id"), e)
+                st.warning(f"Не удалось загрузить товары с сайта ({type(e).__name__}). Откройте страницу производителя.",
+                           icon=":material/cloud_off:")
                 goods = []
         if goods:
             import pandas as pd
@@ -594,8 +606,9 @@ with tab_list:
             with st.spinner(f"Загружаю контакты ({len(need)})…"):
                 try:
                     live.enrich_contacts(con, need)
-                except Exception as e:
-                    print(f"Error enriching contacts: {e}")
+                except (sqlite3.Error, *SITE_ERRORS) as e:
+                    log.warning("enrich contacts: %s", e)
+                    st.caption(f":material/cloud_off: Контакты с сайта не подтянулись ({type(e).__name__}) — показаны из базы.")
                 by_id = {r["id"]: r for r in db.all_suppliers(con, org_name=current_org)}
                 for r in chunk:
                     if r["id"] in by_id:
@@ -703,8 +716,10 @@ with tab_cmp:
             with st.spinner("Уточняю условия поставщиков: заказ, цены, доставка, документы…"):
                 try:
                     advisor.enrich_suppliers_extra(con, missing_extra)
-                except Exception as e:
-                    print(f"Error enriching extra: {e}")
+                except (OpenAIError, sqlite3.Error, *SITE_ERRORS) as e:
+                    log.warning("enrich extra: %s", e)
+                    st.warning(f"Условия поставщиков уточнить не удалось ({type(e).__name__}) — в таблице только данные карточек.",
+                               icon=":material/cloud_off:")
                 all_by_id = {s["id"]: s for s in db.all_suppliers(con, org_name=current_org)}
                 sel = [all_by_id[s["id"]] for s in sel if s["id"] in all_by_id]
 
