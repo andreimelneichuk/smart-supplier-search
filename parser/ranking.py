@@ -13,9 +13,10 @@ STOPWORDS = {
 # веса полей при поиске слова
 W_NAME, W_SUB, W_CAT, W_DESC = 1.0, 0.9, 0.6, 0.5
 # веса итоговой оценки
-WEIGHTS = {"relevance": 0.50, "geo": 0.20, "completeness": 0.15, "size": 0.15}
+WEIGHTS = {"relevance": 0.40, "geo": 0.35, "completeness": 0.15, "size": 0.10}  # подобраны массовым тестом: запросы × города
 MIN_RELEVANCE = 0.30
 GEO_SCALE_KM = 400  # гео-оценка = exp(-(расстояние - до ближайшего) / 400 км): ближайший → 1.0, +300 км → 0.47
+GEO_REL_GATE = 0.6  # с какой релевантности близость учитывается в полную силу
 HEAD_ONLY_FACTOR = 0.5  # запрос «товар + признак», а у поставщика совпал только товар
 MODIFIER_POS = {"ADJF", "ADJS", "PRTF", "PRTS"}
 SITE_REL_BONUS = 0.15  # компанию выдал поиск сайта по всей фразе запроса — небольшая прибавка к релевантности
@@ -205,6 +206,8 @@ def rank(suppliers: list[dict], parsed: dict, cat_names: dict, coords=None, mode
     out = []
     for s, rel, dist in kept:
         geo_score = 0.0 if dist is None else math.exp(-(dist - nearest) / GEO_SCALE_KM)
+        # близость помогает только подходящим по товару: иначе соседний завод с чужим товаром обгоняет нужный
+        geo_score *= min(1.0, rel / GEO_REL_GATE)
         comp = (0.5 if s.get("phones") else 0) + (0.5 if s.get("emails") else 0)
         size = math.log1p(s.get("products_count") or 0) / math.log1p(max_goods)
         parts = {"relevance": rel, "geo": geo_score, "completeness": comp, "size": size}
