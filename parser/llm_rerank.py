@@ -27,7 +27,7 @@ def _load_env():
 
 _load_env()
 
-API_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+API_MODEL = os.environ.get("OPENAI_MODEL", "qwen/qwen3.8-27b")
 BATCH = 25
 
 RUBRIC = """Ты оцениваешь релевантность поставщиков пищевой продукции поисковому запросу покупателя.
@@ -52,7 +52,7 @@ def _prompt(query, docs):
 def _call(prompt: str) -> str:
     _load_env()
     key = os.environ.get("OPENAI_API_KEY")
-    if not key or key == "your_openai_api_key_here":
+    if not key or key.startswith("your_"):
         raise RuntimeError("Укажите валидный OPENAI_API_KEY в файле parser/.env или в переменных окружения")
     base_url = os.environ.get("OPENAI_BASE_URL")
     from openai import OpenAI
