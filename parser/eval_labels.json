@@ -12,7 +12,14 @@
   "sniek-riegion",
   "ptitsiefabrika-novorossiisk",
   "kompaniia-mikhailovskii-broilier",
-  "fish-grill"
+  "fish-grill",
+  "ooo-kura-ru",
+  "ooo-tsaritsyno-etalon",
+  "goodchicken",
+  "darptitsa",
+  "baraka-vkus",
+  "ptitsiefabrika-biektysh",
+  "ooo-raduga-spb"
  ],
  "яйцо": [
   "oao-uglichskaia-ptitsiefabrika",
@@ -29,7 +36,14 @@
   "skha-ptitsiefabrika-kumskaia",
   "ptitsiefabrika-kharabalinskaia",
   "ptitsiefabrika-chamzinskaia",
-  "ooo-lieto-grupp"
+  "ooo-lieto-grupp",
+  "ptitsiefabrika-mir-ptitsy",
+  "strausinaia-fierma-sieviernoie-siianiie",
+  "ptitsiefabrika-bielokalitvinskaia",
+  "ptitsieprom-bobrovskii",
+  "ooo-apollon",
+  "ptitsiefabrika-borovskaia",
+  "ooo-ppr-svierdlovskii"
  ],
  "мёд": [
   "ooo-altai-mied",
@@ -49,7 +63,24 @@
   "ip-kriuchienko-valientin",
   "ooo-ekologichieskiie-produkty-sibiri",
   "stolbushino",
-  "ooo-miedovyie-tiekhnologii"
+  "ooo-miedovyie-tiekhnologii",
+  "the-m-d",
+  "pch-lkino-naturalnyi-altaiskii-m-d",
+  "mied-i-travy-bashkirii",
+  "kompaniia-musikhin-mir-m-da",
+  "kompaniia-bashkirskii-m-d",
+  "proizvoditiel-mieda-iz-ovsiannikovo",
+  "miedkov",
+  "ooo-pchielkovo",
+  "kompaniia-voial",
+  "ooo-bashkirskiie-pasieki",
+  "ooo-goriachiekliuchievskaia-pchielovodnaia-kompaniia",
+  "ooo-pravilnyi-m-d",
+  "miedovitsa",
+  "torgovyi-dom-diagil",
+  "ooo-miedovz",
+  "ooo-kmk",
+  "tainika"
  ],
  "сыр": [
   "proizvoditiel-syra-miezh-kompani",
@@ -61,7 +92,30 @@
   "mamontovskaia-syrovarnia",
   "lipietskii-maslosyrzavod",
   "otkrytoie-aktsioniernoie-obshchiestvo-salskoie-moloko",
-  "msz-syrodalie"
+  "msz-syrodalie",
+  "ooo-brasovskiie-syry",
+  "proizvoditiel-syra-proviant",
+  "goldien-chiz",
+  "motsarulli",
+  "ooo-paliermo",
+  "ooo-vamin-tatarstan",
+  "ooo-nieo-produkt",
+  "molkombinat-adygieiskii",
+  "kuiaganskii-maslosyrzavod",
+  "bielgorodskaia-syrovariennaia-kompaniia",
+  "ooo-molkombinat-novonikolaievskii",
+  "proizvodstviennaia-kompaniia-provintsiia",
+  "molokozavod-adygieia",
+  "ip-kavierina-s-v",
+  "syrodielnaia-kompaniia-alantal",
+  "syrnaia-kompaniia-iantar",
+  "gk-multipro",
+  "ooo-tpp-ianta-a",
+  "tm-white-cheese-from-zhukovka",
+  "ooo-italianskiie-traditsii",
+  "molzavod-riazanskii",
+  "ip-sadzhaia",
+  "tm-mozaretti"
  ],
  "креветки": [
   "morieiedy",
@@ -71,7 +125,9 @@
   "novitek-pro",
   "proizvoditiel-priesiervov-kompaniia-l-dovo",
   "gruppa-kompanii-talieks",
-  "gruppa-kompanii-magdanryba"
+  "gruppa-kompanii-magdanryba",
+  "ooo-krievietka",
+  "vladimirryba"
  ],
  "шоколад": [
   "ooo-shokoliend",
@@ -82,7 +138,33 @@
   "kompaniia-shoko-rua",
   "fabrika-konditierskikh-izdielii-grin",
   "td-amuliet",
-  "tm-manzhielaniia"
+  "tm-manzhielaniia",
+  "brownrabbit",
+  "brilliance",
+  "kompaniia-shokoladnyi-dom",
+  "proizvoditiel-shokoladnykh-podarkov-konfael",
+  "shokoladnaia-fabrika-dobryie-viesti",
+  "ooo-fradie",
+  "mastierskaia-nastoiashchiego-vkusa-dobro",
+  "okasi",
+  "ooo-td-sibirskaia-kriepost",
+  "siemieinaia-manufaktura-kovtyrin",
+  "konditierskaia-fabrika-vostochnyie-sladosti",
+  "kompaniia-la-princesse-choco",
+  "myshoko-ru",
+  "konditierskaia-kompaniia-grand-shokolad",
+  "shokoladnaia-fabrika-amta",
+  "kompaniia-alieksandra-shokolad",
+  "kompaniia-chocoland",
+  "konditierskoie-obiedinieniie-shokoladnyie-traditsii",
+  "siberian-life",
+  "kompaniia-shokoladka-spb",
+  "kompaniia-maritanzh",
+  "shokoladnaia-manufaktura-shokomastier",
+  "mastierskaia-shokolada-zolotoi-zapas",
+  "proizvoditiel-shokolada-dobro",
+  "marussia",
+  "kompaniia-shokoart"
  ],
  "пельмени": [
   "proizvodstviennoie-priedpriiatiie-lakomka",
@@ -90,7 +172,25 @@
   "tsk-organik",
   "prodgreen",
   "kompaniia-avangard",
-  "torgovyi-dom-altyn"
+  "torgovyi-dom-altyn",
+  "ip-nagornykh-i-g",
+  "omskaia-pielmiennaia-fabrika",
+  "izobilnyi-olimp",
+  "ip-shchierbinin",
+  "ooo-bielagrotorg",
+  "luchshiie-rietsiepty-zamorozhiennyie-polufabrikaty",
+  "bashprod",
+  "suzdalskiie-polufabrikaty",
+  "dobrynia-zamorozhiennykh-proizvoditiel-polufabrikatov",
+  "s-pylu-s-zharu",
+  "ooo-gusynia-mom",
+  "ip-osipova",
+  "ooo-fabrika-stm-tm-siemieinoie-iskusstvo",
+  "proizvoditiel-produktsii-volzhskiie-polufabrikaty",
+  "proizvoditiel-polufabrikatov-russkoie-zastolie",
+  "ooo-khliebnoie-ushko",
+  "ooo-art",
+  "agropromyshliennyi-kholding-ariant"
  ],
  "молоко": [
   "molokozavod-pietropavlovskii",
@@ -103,7 +203,29 @@
   "iakutskii-gormolzavod",
   "kataiskii-zavod-molochnykh-produktov",
   "ooo-af-privolie",
-  "gruppa-kompanii-rienna"
+  "gruppa-kompanii-rienna",
+  "oao-mk-sarapul-moloko",
+  "molochnaia-fabrika-kubarus-moloko",
+  "uk-prosto-moloko",
+  "zavod-moloko-zauralie",
+  "molokozavod-iadrinmoloko",
+  "kriestianskoie-khoziaistvo-sukhanovykh",
+  "molochnyi-kombinat-ooo-ekomilk",
+  "uomz",
+  "kompaniia-zorka",
+  "zao-liubinskii-molochnokonsiervnyi-kombinat",
+  "ooo-tiumienmoloko",
+  "oao-molochnyi-kombinat-blagovieshchienskii",
+  "molokazovd-grinagro",
+  "tm-sieviernaia-dolina",
+  "ooo-prosnitskoie-moloko",
+  "ooo-bogorodskoie-moloko",
+  "a2-moloko",
+  "novosibirskii-molochnyi-zavod",
+  "ptk-milana",
+  "ooo-nikolaievskaia-fierma",
+  "ooo-tvier-moloko",
+  "piatigorskii-molochnyi-kombinat"
  ],
  "колбаса": [
   "proizvoditiel-kolbasnykh-i-molochnykh-izdielii-dmitrogorskii-produkt",
@@ -111,7 +233,39 @@
   "kompaniia-mikhailovskii-broilier",
   "agrokholding-rpi-grupp",
   "miasokombinat-nadiezhda",
-  "ptitsiefabrika-svierdlovskaia"
+  "ptitsiefabrika-svierdlovskaia",
+  "ievpatoriiskiie-kolbasy-ip-kishienia-v-a",
+  "ooo-fabrika-smirnov",
+  "ooo-lipietskiie-zori",
+  "kolbasnyi-zavod-donskiie-traditsii",
+  "kompaniia-sibirskiie-kolbasy",
+  "kolbasnyi-tsiekh-elita",
+  "kompaniia-gienieralskiie-kolbasy",
+  "iegorievskaia-fabrika-kolbasno-gastronomichieskaia-im-k-iu-afanasieva",
+  "kolbasnyi-zavod-stolichnyi",
+  "elita-iuga",
+  "miasokombinat-angarskii",
+  "fiermierskaia-gubierniia",
+  "ooo-mpk-chiernyshievoi",
+  "ooo-mpp",
+  "ooo-shinkoliubovo",
+  "mpk-chiernyshievoi",
+  "miasokombinat-lieto",
+  "ooo-vit",
+  "miasokombinat-balakhonovskii",
+  "miasnoi-zavod-bychkov",
+  "kompaniia-viepoz",
+  "ooo-miasokombinat-iantarnyi",
+  "kolbastier",
+  "becon",
+  "proizvoditiel-miasnykh-produktov-bars",
+  "ip-novikov-igor-i-m",
+  "sochinskii-miasokombinat",
+  "riazanskii-miasokombinat-kortlav",
+  "chierkizovskii-miasopierierabatyvaiushchii-zavod",
+  "fabrika-smirnov",
+  "ooo-taganrogskii-miasokombinat",
+  "piervyi-miasokombinat"
  ],
  "хлеб": [
   "chiernovskoi-khlieb",
@@ -121,7 +275,22 @@
   "kazanskii-khliebozavod-3",
   "pshntsa",
   "ao-khliebokombinat-gieorgiievskii",
-  "kostromskaia-sloboda"
+  "kostromskaia-sloboda",
+  "ooo-vash-khlieb",
+  "kompaniia-elita-khlieb-siervis",
+  "ievropieiskii-khlieb",
+  "zao-khlieb",
+  "proizvodstviennoie-priedpriiatiie-khliebnyi-liekar",
+  "kompaniia-kvadrat",
+  "ooo-mikhailovskoie-2",
+  "ooo-gubakhakhlieb",
+  "ao-smolienskii-khliebokombinat",
+  "khliebopiekarnaia-kompaniia-bosko-l",
+  "shu-chef",
+  "mistier-zlak",
+  "khliebozavod-vozdvizhienskii-khlieb",
+  "fabrika-arzamasskii-khlieb",
+  "kompaniia-sormovskii-khlieb"
  ],
  "орехи": [
   "stolbushino",
@@ -139,18 +308,45 @@
   "tm-shchielchok",
   "ooo-pk-uralskii-lidier",
   "ooo-sprut",
-  "kompaniia-td-asal-ko"
+  "kompaniia-td-asal-ko",
+  "gk-gud-fud",
+  "moskovskaia-oriekhovaia-kompaniia",
+  "ooo-ekoprodukt",
+  "pierierabatyvaiushchaia-kompaniia-kiedr-eksport",
+  "oriekhovaia-kompaniia-luch",
+  "6725032956",
+  "ooo-progriess",
+  "ooo-lios",
+  "good-nut",
+  "ooo-tamariks",
+  "ooo-alfavit-zdorovia",
+  "oriekhovyi-dar"
  ],
  "тушенка": [
-  "tm-baltiiskii-etalon"
+  "tm-baltiiskii-etalon",
+  "kronidov-konsiervy-21-go-vieka",
+  "ooo-iardosnab",
+  "myaso-v-bankie"
  ],
  "мёд липовый": [
   "ooo-pch-lkin-m-d",
   "ooo-miedovyie-tiekhnologii",
-  "ooo-dikii-mied"
+  "ooo-dikii-mied",
+  "mied-i-travy-bashkirii",
+  "ooo-bismark",
+  "ooo-miedovz",
+  "miedkov",
+  "ooo-pchielkovo",
+  "piermskiie-pchiely",
+  "smart-bee"
  ],
  "сыр моцарелла": [
-  "lipietskii-maslosyrzavod"
+  "lipietskii-maslosyrzavod",
+  "motsarulli",
+  "ooo-tpp-ianta-a",
+  "ooo-paliermo",
+  "tm-mozaretti",
+  "ooo-italianskiie-traditsii"
  ],
  "колбаса копчёная": [
   "ptitsiefabrika-novorossiisk",
@@ -158,7 +354,9 @@
   "proizvoditiel-kolbasnykh-i-molochnykh-izdielii-dmitrogorskii-produkt",
   "agrokholding-rpi-grupp",
   "miasokombinat-nadiezhda",
-  "ptitsiefabrika-svierdlovskaia"
+  "ptitsiefabrika-svierdlovskaia",
+  "ooo-taganrogskii-miasokombinat",
+  "becon"
  ],
  "хлеб ржаной": [
   "chiernovskoi-khlieb",
@@ -166,29 +364,50 @@
   "ooo-firma-suvienir",
   "ao-tiumienskii-khliebokombinat",
   "kazanskii-khliebozavod-3",
-  "ao-khliebokombinat-gieorgiievskii"
+  "ao-khliebokombinat-gieorgiievskii",
+  "mistier-zlak",
+  "zao-khlieb",
+  "ao-smolienskii-khliebokombinat",
+  "ooo-kppp-ruskon"
  ],
  "креветки замороженные": [
   "polar",
   "gruppa-kompanii-talieks",
   "gk-atlantis",
-  "gruppa-kompanii-magdanryba"
+  "gruppa-kompanii-magdanryba",
+  "ooo-krievietka",
+  "novitek-pro",
+  "vladimirryba"
  ],
  "орехи грецкие": [
   "gruppa-kompanii-unitron",
   "ao-oriekhprom",
-  "grietskii-oriekh-ip-abdulkhanan"
+  "grietskii-oriekh-ip-abdulkhanan",
+  "ooo-ekoprodukt",
+  "ooo-frutlain"
  ],
  "рыба соленая": [
   "ooo-soiuzprodimpieks",
-  "rybnyi-zavod-raptika"
+  "rybnyi-zavod-raptika",
+  "kompaniia-ryba-tsar",
+  "gruppa-kompanii-smolienskaia-kolliektsiia",
+  "ooo-promryboprodukt",
+  "solilo",
+  "ooo-dielika",
+  "kompaniia-soiuzryba",
+  "i-fish"
  ],
  "мясо индейки": [
   "ooo-grinpro",
-  "miasnoie-riemieslo"
+  "miasnoie-riemieslo",
+  "oskolskaia-indieika",
+  "zao-pf-tavrichieskaia",
+  "gruppa-kompaniia-damatie"
  ],
  "яйцо перепелиное": [
   "oao-uglichskaia-ptitsiefabrika",
-  "ptitsiefierma-iamskoie-podvorie"
+  "ptitsiefierma-iamskoie-podvorie",
+  "ptitsiefabrika-borovskaia",
+  "ptitsievodchieskii-komplieks-sibirskii-pieriepiel"
  ]
 }
