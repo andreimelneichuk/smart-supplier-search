@@ -178,6 +178,10 @@ def coords(city, region=None):
 RANK_RETRY_SEC = 120  # упавшую модель не дёргаем на каждом клике: иначе каждый rerun ждёт API и снова падает
 
 
+LOCAL_KM = 150    # «рядом с городом»
+LOCAL_REL = 0.6   # с какой релевантности считаем, что у компании есть именно этот товар
+
+
 def run_ranking(rows=None):
     rows = rows if rows is not None else db.all_suppliers(con, org_name=current_org)
     failed = st.session_state.setdefault("rank_failed_at", {})
@@ -194,6 +198,15 @@ def run_ranking(rows=None):
             failed[model] = time.time()
             continue
         return res
+
+
+def goods_word(n: int) -> str:
+    n = abs(int(n))
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} товар"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return f"{n} товара"
+    return f"{n} товаров"
 
 
 def distance_km(s: dict):
@@ -244,6 +257,16 @@ if parsed["city"] and results is not None:
             results = run_ranking()
 
 
+# одна компания часто заведена несколькими карточками (бренд, филиал) — оставляем лучшую по баллу
+results = advisor.dedupe(results)
+
+# если в городе нет производителей именно этого товара — говорим прямо, а не молча показываем другие регионы
+no_local = None
+if parsed["city"] and parsed["terms"] and results:
+    relevant = [r for r in results if r["parts"]["relevance"] >= LOCAL_REL and r.get("distance_km") is not None]
+    if relevant and min(r["distance_km"] for r in relevant) > LOCAL_KM:
+        no_local = min(r["distance_km"] for r in relevant)
+
 # Фильтры
 if only_contacts:
     results = [r for r in results if r["phones"] or r["emails"]]
@@ -285,7 +308,7 @@ def show_b2b_passport_dialog(item_id: int):
             meta_items.append(f"*(≈ {item_dist} км от г. {parsed['city']})*")
         meta_items.append(f"Товар: **{item['subcategory'] or '—'}**")
         if item.get("products_count"):
-            meta_items.append(f"Ассортимент: **{item['products_count']} товаров**")
+            meta_items.append(f"Ассортимент: **{goods_word(item['products_count'])}**")
         st.markdown(" · ".join(meta_items))
 
     force_key = f"force_ai_{item['id']}"
@@ -504,6 +527,10 @@ with tab_list:
         pages = max(1, -(-len(results) // PAGE_SIZE))
         c1, c_ai = st.columns([3, 3])
         c1.subheader(f"Найдено поставщиков: {len(results)}")
+        if no_local:
+            st.info(f"В г. {parsed['city']} и в радиусе {LOCAL_KM} км производителей именно этого товара нет — "
+                    f"ближайший в {no_local} км. Местные компании со смежным ассортиментом тоже в списке, "
+                    f"наличие товара у них стоит уточнить.", icon=":material/near_me_disabled:")
     
         # Кнопка умного отбора LLM
         if results and q:
@@ -562,7 +589,7 @@ with tab_list:
                     meta += f" *(≈ {r['distance_km']} км от г. {parsed['city']})*"
                 meta += f" · Товар: **{r['subcategory'] or '—'}**"
                 if r["products_count"]:
-                    meta += f" · Ассортимент: **{r['products_count']} товаров**"
+                    meta += f" · Ассортимент: **{goods_word(r['products_count'])}**"
                 left.markdown(meta)
             
                 left.write(r["description"])
