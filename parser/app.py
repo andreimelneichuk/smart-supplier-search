@@ -11,8 +11,6 @@ import ranking
 import advisor
 
 PAGE_SIZE = 10
-GOOD_SCORE = 0.8     # «хороший» результат
-LIVE_THRESHOLD = 10  # если хороших результатов меньше — добираем с источника
 
 st.set_page_config(page_title="Поиск поставщиков продуктов", page_icon=":material/storefront:", layout="wide")
 
@@ -215,21 +213,25 @@ def geocode_missing(rows, limit=5):
     return bool(todo)
 
 
-results = run_ranking(suppliers)
-
-# --- Добор с источника, если по запросу мало ---
+# --- Поиск на отраслевом сайте: по каждому новому запросу (один раз за сессию) ---
 query_key = " ".join(parsed["terms"]) + "|" + (parsed["city"] or "")
-good = sum(1 for r in results if r["score"] > GOOD_SCORE)
+site_found = st.session_state.setdefault("site_found", {})
 if live.is_blocked():
-    st.warning("Источник временно ограничил запросы — показываю только сохранённые данные. "
-               "Живой поиск вернётся через несколько минут.")
-elif parsed["terms"] and good < LIVE_THRESHOLD and query_key not in st.session_state.live_done:
-    with st.spinner("Мало сильных совпадений — ищу на отраслевом источнике…"):
-        added = live.search_live(con, " ".join(parsed["terms"]), city=parsed["city"])
+    st.warning("Сайт с каталогом временно ограничил запросы — показываю только сохранённые данные. "
+               "Поиск на сайте вернётся через несколько минут.")
+elif parsed["terms"] and query_key not in st.session_state.live_done:
+    # раньше на сайт ходили, только если в базе мало сильных совпадений, — на частых запросах почти никогда
+    found = set()
+    with st.spinner("Ищу свежих поставщиков на сайте каталога…"):
+        added = live.search_live(con, " ".join(parsed["terms"]), city=parsed["city"], found=found)
     st.session_state.live_done.add(query_key)
+    site_found[query_key] = found
     if added:
-        st.toast(f"Добавлено с источника: {added}")
-    results = run_ranking()
+        st.toast(f"Новых поставщиков с сайта: {added}", icon=":material/add_business:")
+    suppliers = db.all_suppliers(con, org_name=current_org)
+# компании, которых сайт выдал по этому запросу, не должны тонуть из-за короткого описания у нас
+parsed["site_ids"] = site_found.get(query_key, set())
+results = run_ranking(suppliers)
 
 if parsed["city"] and results is not None:
     with st.spinner("Считаю расстояния…") if any(

@@ -58,6 +58,7 @@ def parse_search(html: str) -> list[dict]:
         product = pc.clean(link.get_text())
         if fid in firms:
             firms[fid]["description"] += f" · {product}"
+            firms[fid]["found_products"].append(product)
             continue
         city = card.select_one("div.ii_city")
         city_a = city.select_one("a[href]") if city else None
@@ -71,17 +72,45 @@ def parse_search(html: str) -> list[dict]:
             "subcategory": product,
             "city": pc.clean(city.get_text()) if city else None,
             "description": f"{product}. " + (pc.clean(desc.get_text()) if desc else ""),
-            "products_count": None, "categories": [],
+            "products_count": None, "categories": [], "found_products": [product],
+        }
+    # по некоторым запросам сайт отдаёт не товары, а сразу карточки компаний
+    for card in soup.select("div.card_item.firm"):
+        link = card.select_one("div.text a.link[href]")
+        m = re.search(r"/producers/(\d+)/([\w-]+)", link["href"]) if link else None
+        if not m or m.group(2) in firms:
+            continue
+        city = card.select_one("div.ii_city")
+        city_a = city.select_one("a[href]") if city else None
+        rm = re.search(r"/r-([a-z0-9-]+-\d+)/", city_a["href"]) if city_a else None
+        desc = card.select_one("div.item_descriptor")
+        goods = card.select_one("div.ii_goods")
+        firms[m.group(2)] = {
+            "id": int(m.group(1)), "slug": m.group(2), "name": pc.clean(link.get_text()),
+            "url": pc.BASE + link["href"],
+            "region_slug": rm.group(1) if rm else None,
+            "subcategory": None,
+            "city": pc.clean(city.get_text()) if city else None,
+            "description": pc.clean(desc.get_text()) if desc else "",
+            "products_count": int(goods.get_text(strip=True)) if goods and goods.get_text(strip=True).isdigit() else None,
+            "categories": [], "found_products": [], "from_search": True,
         }
     return list(firms.values())
 
 
-def search_live(con, query: str, pages: int = 2, city: str | None = None) -> int:
+def search_live(con, query: str, pages: int = 2, city: str | None = None, found: set | None = None) -> int:
     """Ищет на сайте, кладёт новых производителей в БД. Возвращает число новых.
-    Если задан город, сначала ищем «товар + город» (сайт ищет по И, выдача точнее), потом просто товар."""
-    queries = ([(f"{query} {city}", 1)] if city else []) + [(query, pages)]
-    new = 0
-    for q, n_pages in queries:
+    Если задан город, сначала ищем «товар + город» (сайт ищет по И, выдача точнее), потом просто товар.
+    Если по всей фразе нашлось мало компаний, добавляем поиск по главному слову («креветки замороженные» → «креветки»).
+    found — сюда складываются id всех компаний, которых сайт выдал по запросу (и новых, и уже известных)."""
+    queries = ([(f"{query} {city}", 1, False)] if city else []) + [(query, pages, False)]
+    head = query.split()[0] if query.split() else ""
+    if head and head != query:
+        queries.append((head, pages, True))
+    new, slugs = 0, set()
+    for q, n_pages, broad in queries:
+        if broad and len(slugs) >= 10:
+            break  # по всей фразе нашлось достаточно
         for page in range(1, n_pages + 1):
             url = f"{pc.BASE}/search/?q={requests_quote(q)}" + (f"&page={page}" if page > 1 else "")
             html = _fetch(url)
@@ -90,7 +119,12 @@ def search_live(con, query: str, pages: int = 2, city: str | None = None) -> int
                 break
             for it in items:
                 new += db.upsert(con, it)
+                if not broad:  # по одному главному слову сайт выдаёт слишком широко — не считаем это попаданием
+                    slugs.add(it["slug"])
     con.commit()
+    if found is not None and slugs:
+        marks = ",".join("?" * len(slugs))
+        found.update(r[0] for r in con.execute(f"SELECT id FROM suppliers WHERE slug IN ({marks})", list(slugs)))
     return new
 
 
