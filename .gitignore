@@ -31,3 +31,5 @@ parser/data/*.cache
 # готовая база и кэш эмбеддингов лежат в репозитории, чтобы демо работало сразу после клона
 !parser/suppliers.db
 !parser/data/embeddings.npz
+*.db-wal
+*.db-shm
