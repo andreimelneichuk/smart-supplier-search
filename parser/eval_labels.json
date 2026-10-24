@@ -19,7 +19,10 @@
   "darptitsa",
   "baraka-vkus",
   "ptitsiefabrika-biektysh",
-  "ooo-raduga-spb"
+  "ooo-raduga-spb",
+  "ooo-mieattorg",
+  "soiuz",
+  "ooo-dierievienskaia-ieda"
  ],
  "яйцо": [
   "oao-uglichskaia-ptitsiefabrika",
@@ -80,7 +83,8 @@
   "torgovyi-dom-diagil",
   "ooo-miedovz",
   "ooo-kmk",
-  "tainika"
+  "tainika",
+  "ooo-bismark"
  ],
  "сыр": [
   "proizvoditiel-syra-miezh-kompani",
@@ -115,7 +119,9 @@
   "ooo-italianskiie-traditsii",
   "molzavod-riazanskii",
   "ip-sadzhaia",
-  "tm-mozaretti"
+  "tm-mozaretti",
+  "ooo-kurskii-molochnyi-zavod",
+  "syrovarnia-sultanovo"
  ],
  "креветки": [
   "morieiedy",
@@ -164,7 +170,9 @@
   "mastierskaia-shokolada-zolotoi-zapas",
   "proizvoditiel-shokolada-dobro",
   "marussia",
-  "kompaniia-shokoart"
+  "kompaniia-shokoart",
+  "shoko-queen",
+  "proizvodstviennaia-firma-shokoladnaia-kompaniia"
  ],
  "пельмени": [
   "proizvodstviennoie-priedpriiatiie-lakomka",
@@ -190,7 +198,10 @@
   "proizvoditiel-polufabrikatov-russkoie-zastolie",
   "ooo-khliebnoie-ushko",
   "ooo-art",
-  "agropromyshliennyi-kholding-ariant"
+  "agropromyshliennyi-kholding-ariant",
+  "kulinarnyie-rieshieniia",
+  "tm-tsarskii-standart",
+  "kompaniia-khoroshaia-kukhnia"
  ],
  "молоко": [
   "molokozavod-pietropavlovskii",
@@ -225,7 +236,11 @@
   "ptk-milana",
   "ooo-nikolaievskaia-fierma",
   "ooo-tvier-moloko",
-  "piatigorskii-molochnyi-kombinat"
+  "piatigorskii-molochnyi-kombinat",
+  "kompaniia-molviest",
+  "vkusniaiev",
+  "birskii-kombinat-molochnykh-produktov",
+  "gruppa-kompanii-ditol"
  ],
  "колбаса": [
   "proizvoditiel-kolbasnykh-i-molochnykh-izdielii-dmitrogorskii-produkt",
@@ -265,7 +280,15 @@
   "chierkizovskii-miasopierierabatyvaiushchii-zavod",
   "fabrika-smirnov",
   "ooo-taganrogskii-miasokombinat",
-  "piervyi-miasokombinat"
+  "piervyi-miasokombinat",
+  "miasokombinat-sniezhana",
+  "ooo-miasopierierabatyvaiushchii-komplieks-apkh-kudinovo",
+  "iadrinskii-miasokombinat-chuvashpotriebsloiuza",
+  "slobodskoi-miasokombinat",
+  "miasokombinat-vladimirskii-standart",
+  "tm-bakhrushin",
+  "oao-vielikolukskii-miasokombinat",
+  "gvardieiskii-miasokombinat"
  ],
  "хлеб": [
   "chiernovskoi-khlieb",
@@ -326,7 +349,17 @@
   "tm-baltiiskii-etalon",
   "kronidov-konsiervy-21-go-vieka",
   "ooo-iardosnab",
-  "myaso-v-bankie"
+  "myaso-v-bankie",
+  "ooo-kppp-ruskon",
+  "baryshskii-miasokombinat-tm-armiia-rossii",
+  "ooo-troitskii-konsiervnyi-kombinat",
+  "ooo-empikon",
+  "rossiiskii-kontsiern-dubki",
+  "buzdiakskii-konsiervnyi-kombinat",
+  "ooo-ekoprod",
+  "luzhskii-konsiervnyi-zavod",
+  "armavirskii-miasokonsiervnyi-kombinat",
+  "baltrybtiekh"
  ],
  "мёд липовый": [
   "ooo-pch-lkin-m-d",
@@ -338,7 +371,10 @@
   "miedkov",
   "ooo-pchielkovo",
   "piermskiie-pchiely",
-  "smart-bee"
+  "smart-bee",
+  "the-m-d",
+  "ooo-kmk",
+  "fiermierskoie-khoziaistvo-ziemliedar"
  ],
  "сыр моцарелла": [
   "lipietskii-maslosyrzavod",
@@ -346,7 +382,14 @@
   "ooo-tpp-ianta-a",
   "ooo-paliermo",
   "tm-mozaretti",
-  "ooo-italianskiie-traditsii"
+  "ooo-italianskiie-traditsii",
+  "kompaniia-laktalis-vostok",
+  "kompaniia-mikielandzhielo",
+  "goldien-chiz",
+  "maslodielno-syrodielnyi-kombinat-mikhailovskii",
+  "ooo-papina-syrovarnia",
+  "maloiaroslavietskii-molochnyi-kombinat",
+  "fabrika-favorit"
  ],
  "колбаса копчёная": [
   "ptitsiefabrika-novorossiisk",
@@ -356,7 +399,16 @@
   "miasokombinat-nadiezhda",
   "ptitsiefabrika-svierdlovskaia",
   "ooo-taganrogskii-miasokombinat",
-  "becon"
+  "becon",
+  "ooo-lipietskiie-zori",
+  "ooo-vit",
+  "miasokombinat-balakhonovskii",
+  "fiermierskaia-gubierniia",
+  "ooo-mpp",
+  "abi-product",
+  "piervyi-miasokombinat",
+  "ooo-priestizh",
+  "miasnoi-zavod-bychkov"
  ],
  "хлеб ржаной": [
   "chiernovskoi-khlieb",
@@ -402,7 +454,9 @@
   "miasnoie-riemieslo",
   "oskolskaia-indieika",
   "zao-pf-tavrichieskaia",
-  "gruppa-kompaniia-damatie"
+  "gruppa-kompaniia-damatie",
+  "ooo-dierievienskaia-ieda",
+  "iegorievskaia-ptitsiefabrika"
  ],
  "яйцо перепелиное": [
   "oao-uglichskaia-ptitsiefabrika",

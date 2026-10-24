@@ -38,7 +38,7 @@ NOT_FOOD_HEADS = {
     "жиросжигатель", "хозтовары",
 }
 DERIVED_FACTOR = 0.6  # те же «корм, приправа, упаковка, блюдо», что и в рубрике llm_rerank
-DERIVED_HEADS = {"снек", "снэк", "чипсы", "корм", "консервы", "паштет", "приправа", "специя", "соус",
+DERIVED_HEADS = {"снек", "снэк", "чипсы", "корм", "комбикорм", "премикс", "консервы", "паштет", "приправа", "специя", "соус",
                  "добавка", "ароматизатор", "упаковка", "тара"}
 SECONDARY_FACTOR = 0.7  # искомый товар не в специализации/названии компании, а только в описании
 PARENT_REL = 0.45       # специализация — родительская категория из справочника (птица для индейки)
@@ -185,7 +185,39 @@ def distance_to(s: dict, city: str | None, user_xy, coords) -> float | None:
     return None
 
 
+# товар часто назван в карточках иначе, чем в запросе: «тушенка» — это «тушёное мясо» и «мясные консервы»
+SYNONYMS = {
+    "тушенка": [["тушеное", "мясо"], ["мясные", "консервы"]],
+    "креветка": [["морепродукты"]],
+    "сгущенка": [["сгущенное", "молоко"]],
+    "морепродукты": [["креветки"], ["мидии"], ["кальмар"]],
+}
+_SYN_BY_STEM = {stem(k): v for k, v in SYNONYMS.items()}
+
+
+def query_variants(terms: list[str]) -> list[list[str]]:
+    """Сам запрос и его переформулировки по SYNONYMS (слово заменяется целой фразой)."""
+    out = [terms]
+    for i, t in enumerate(terms):
+        for alt in _SYN_BY_STEM.get(stem(t), []):
+            out.append(terms[:i] + alt + terms[i + 1:])
+    return out
+
+
 def rank(suppliers: list[dict], parsed: dict, cat_names: dict, coords=None, model: str = "bm25_cross") -> list[dict]:
+    """Ранжирует по запросу и его синонимичным переформулировкам; у компании берём лучший балл."""
+    variants = query_variants(parsed["terms"])
+    if len(variants) == 1:
+        return _rank(suppliers, parsed, cat_names, coords, model)
+    best = {}
+    for terms in variants:
+        for r in _rank(suppliers, {**parsed, "terms": terms}, cat_names, coords, model):
+            if r["id"] not in best or r["score"] > best[r["id"]]["score"]:
+                best[r["id"]] = r
+    return dedupe(sorted(best.values(), key=lambda r: r["score"], reverse=True))
+
+
+def _rank(suppliers: list[dict], parsed: dict, cat_names: dict, coords=None, model: str = "bm25_cross") -> list[dict]:
     """coords(city, region) -> (lat, lon) | None — офлайн-функция координат (geo.cached_coords).
     model: 'bm25_cross' | 'bm25' | 'lexical' | 'llm'
     """
@@ -262,7 +294,8 @@ def rank(suppliers: list[dict], parsed: dict, cat_names: dict, coords=None, mode
         rel = float(rel_scores[i])
         if head_floor and rel < HEAD_ONLY_FACTOR:
             rel = max(rel, HEAD_ONLY_FACTOR * search.lexical_score(s, [head_floor], cat_names))
-        if non_food_clash(s, query_lemmas):
+        non_food = non_food_clash(s, query_lemmas)
+        if non_food:
             # «Овощные грунты», «Ножи для резки овощей», «Лотки для овощей» по запросу «овощи замороженные»
             rel *= NON_FOOD_FACTOR
         derived = derived_clash(s, query_lemmas)
@@ -275,7 +308,8 @@ def rank(suppliers: list[dict], parsed: dict, cat_names: dict, coords=None, mode
             # среди прочего есть хлеб, не должен стоять наравне с хлебозаводами
             rel *= SECONDARY_FACTOR
             # по специализации, а не по названию: «Птицефабрика» с товаром «Яйцо куриное» индейку не продаёт
-            if parent and is_main_product(s, parent, with_name=False):
+            # оборудование и корма «для птицы» сюда не попадают: иначе штраф выше перебивается этим полом
+            if parent and not (non_food or derived) and is_main_product(s, parent, with_name=False):
                 rel = max(rel, parent_rel)  # птицефабрика по запросу «мясо индейки»
         if s["id"] in site_ids and rel > 0 and not derived:  # сайт тоже ищет по словам и путает снеки с мясом
             rel = min(1.0, rel + SITE_REL_BONUS)
@@ -304,12 +338,76 @@ def rank(suppliers: list[dict], parsed: dict, cat_names: dict, coords=None, mode
         score = sum(w[k] * v for k, v in parts.items())
         out.append({
             **s,
+            "reliability": reliability(s, size),
             "distance_km": None if dist is None else round(dist),
             "score": round(score, 4),
             "parts": {k: round(v, 2) for k, v in parts.items()}
         })
-    return sorted(out, key=lambda r: r["score"], reverse=True)
+    # одна компания часто заведена несколькими карточками (бренд, филиал) — оставляем лучшую по баллу
+    return dedupe(sorted(out, key=lambda r: r["score"], reverse=True))
 
+
+
+def _brand(s: dict) -> str:
+    """«Группа компаний «Вамин Татарстан»» и «Производитель … «ВАМИН»» -> «вамин»."""
+    name = s.get("name") or ""
+    m = re.search(r"[«\"]([^»\"]+)", name)
+    words = re.findall(r"[а-яёa-z0-9]+", (m.group(1) if m else name).lower())
+    return words[0] if words else ""
+
+
+def same_company(a: dict, b: dict) -> bool:
+    """Две карточки одной компании: общий телефон или почта, либо один бренд в одном городе."""
+    phones = lambda s: {re.sub(r"\D", "", p)[-10:] for p in s.get("phones") or []}
+    if phones(a) & phones(b) or set(a.get("emails") or []) & set(b.get("emails") or []):
+        return True
+    return bool(_brand(a)) and _brand(a) == _brand(b) and a.get("city") == b.get("city")
+
+
+def _company_keys(s: dict) -> set:
+    keys = {("p", re.sub(r"\D", "", p)[-10:]) for p in s.get("phones") or []}
+    keys |= {("e", e) for e in s.get("emails") or []}
+    if _brand(s):
+        keys.add(("b", _brand(s), s.get("city")))
+    return keys
+
+
+def dedupe(suppliers: list[dict]) -> list[dict]:
+    """То же, что попарный same_company, но по индексу ключей: на стартовом экране в списке вся база."""
+    out, seen = [], set()
+    for s in suppliers:
+        keys = _company_keys(s)
+        if keys & seen:
+            continue
+        seen |= keys
+        out.append(s)
+    return out
+
+
+def reliability(s: dict, size: float) -> float:
+    """Насколько поставщик выглядит настоящим действующим производителем — по тому, что известно из карточки:
+    есть телефон и почта, большой ассортимент, подробное описание."""
+    contacts = (0.35 if s.get("phones") else 0) + (0.25 if s.get("emails") else 0)
+    desc = min(len(s.get("description") or "") / 600, 1.0)
+    return round(contacts + 0.25 * size + 0.15 * desc, 2)
+
+
+STRONG_REL = 0.6  # с какой релевантности считаем, что у компании есть именно этот товар
+SORTS = {
+    "Лучшее совпадение": None,
+    "Ближе к городу": lambda r: r["distance_km"] if r.get("distance_km") is not None else float("inf"),
+    "Надёжнее": lambda r: -r["reliability"],
+    "Шире ассортимент": lambda r: -(r.get("products_count") or 0),
+}
+
+
+def sort_results(results: list[dict], mode: str) -> list[dict]:
+    """Другие сортировки поверх поиска: сначала те, у кого точно есть искомый товар, внутри — по выбранному признаку.
+    Иначе «ближе к городу» поднимает соседний молокозавод над сыроварней с моцареллой."""
+    key = SORTS.get(mode)
+    if key is None:
+        return results
+    return sorted(results, key=lambda r: (r.get("parts", {}).get("relevance", 1) < STRONG_REL, key(r)))
 
 
 def correct_terms(terms: list[str], suppliers: list[dict]) -> list[str] | None:

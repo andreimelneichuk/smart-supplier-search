@@ -58,6 +58,11 @@ def variants(docs, query):
     else:
         out["cross_enc"] = []
         
+    # весь пайплайн сервиса: синонимы, роли слов, отсев непищевого, склейка дублей
+    pos = {d["id"]: i for i, d in enumerate(docs)}
+    res = ranking.rank(docs, {"terms": terms, "city": None, "raw": query}, pc.CATEGORIES, model="bm25_cross")
+    out["service"] = [pos[r["id"]] for r in res]
+
     if os.environ.get("EVAL_LLM"):
         import llm_rerank
         top = cand_cross[:30]

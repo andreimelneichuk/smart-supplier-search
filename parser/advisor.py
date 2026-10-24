@@ -9,16 +9,20 @@
 3. Интеллектуальное сравнение и выработка стратегии закупки (Procurement Copilot)
 """
 import json
+import logging
 import os
 import re
+import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 import db
+from ranking import _brand, dedupe, same_company  # склейка карточек одной компании живёт рядом с ранжированием
 
 HERE = Path(__file__).parent
+log = logging.getLogger(__name__)
 
 
 def load_env():
@@ -63,8 +67,8 @@ def call_llm(client: OpenAI, prompt: str, max_tokens: int = 800) -> str:
             content = res.choices[0].message.content or ""
             if content.strip():
                 return content
-        except Exception as e:
-            print(f"Model {m} failed ({e}). Trying fallback...")
+        except OpenAIError as e:
+            log.warning("model %s failed (%s), trying fallback", m, e)
             continue
     return ""
 
@@ -79,19 +83,19 @@ def parse_json_from_llm(raw: str) -> dict | None:
     cleaned = re.sub(r"\s*```$", "", cleaned)
     try:
         return json.loads(cleaned)
-    except Exception:
+    except json.JSONDecodeError:
         pass
     m = re.search(r"(\{.*\})", cleaned, re.DOTALL)
     if m:
         candidate = m.group(1).strip()
         try:
             return json.loads(candidate)
-        except Exception:
+        except json.JSONDecodeError:
             # Убираем trailing commas перед закрывающими скобками
             fixed = re.sub(r",\s*([\]}])", r"\1", candidate)
             try:
                 return json.loads(fixed)
-            except Exception:
+            except json.JSONDecodeError:
                 pass
     return None
 
@@ -111,8 +115,8 @@ def fetch_full_page_text(url: str) -> str:
         if main:
             text = main.get_text(" ")
             return re.sub(r"\s+", " ", text).strip()
-    except Exception as e:
-        print(f"Error fetching page text: {e}")
+    except (AttributeError, ValueError) as e:  # страница без ожидаемой разметки
+        log.warning("page text %s: %s", url, e)
     return ""
 
 
@@ -129,6 +133,46 @@ STRICT_RULES = """Правила:
 - Бери только то, что прямо написано в тексте. Ничего не оценивай и не додумывай по «типичным» значениям.
 - Если параметра в тексте нет — пиши ровно «не указано».
 - Не называй ГОСТ, ТУ, сертификаты, цены и объёмы, которых нет в тексте."""
+
+
+# Проверка ответа модели по исходному тексту: промпт модель может нарушить, а код — нет.
+# Что модель может «назвать» и что для этого должно встречаться в карточке
+DOC_MARKERS = [
+    r"гост", r"\bту\b", r"тр\s*тс", r"хассп|haccp", r"меркури", r"честн\w*\s+знак", r"\biso\b|\bисо\b",
+    r"халял|halal", r"декларац|\bеас\b|\beac\b", r"сертифик", r"органик|organic",
+]
+_NUM = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+def _norm(text: str) -> str:
+    t = (text or "").lower().replace("ё", "е")
+    return re.sub(r"(?<=\d)[\s\u00a0](?=\d{3}\b)", "", t)  # «1 500» -> «1500»
+
+
+def unsupported(claim: str, source: str) -> bool:
+    """В утверждении есть число или документ (ГОСТ, ХАССП, «Меркурий»…), которых нет в тексте карточки."""
+    c, s = _norm(claim), _norm(source)
+    src_nums = set(_NUM.findall(s))
+    if any(n not in src_nums for n in _NUM.findall(c)):
+        return True
+    return any(re.search(p, c) and not re.search(p, s) for p in DOC_MARKERS)
+
+
+def ground(value, source: str, keep_docs_questions: bool = False):
+    """Строка с неподтверждённым фактом -> «не указано»; в списке такие пункты выкидываются."""
+    if isinstance(value, list):
+        return [v for v in value if isinstance(v, str) and not unsupported(v, source)]
+    if isinstance(value, str) and is_known(value) and unsupported(value, source):
+        return NOT_SPECIFIED
+    return value
+
+
+def ground_sentences(text: str, source: str) -> str:
+    """Из связного текста (обоснование совета) убираем предложения с неподтверждёнными фактами."""
+    if not isinstance(text, str):
+        return text
+    kept = [p for p in re.split(r"(?<=[.!?])\s+", text) if not unsupported(p, source)]
+    return " ".join(kept)
 
 
 def extract_extra_info(client: OpenAI | None, supplier: dict) -> dict:
@@ -164,9 +208,11 @@ def extract_extra_info(client: OpenAI | None, supplier: dict) -> dict:
         data = parse_json_from_llm(call_llm(client, prompt, max_tokens=250))
         if isinstance(data, dict):
             # без min_order поставщик считается необогащённым и LLM вызывается на каждом клике
-            return {**DEFAULT_EXTRA, **{k: str(v).strip() for k, v in data.items() if k in DEFAULT_EXTRA and v}}
-    except Exception as e:
-        print(f"Error enriching {name}: {e}")
+            source = f"{name} {sub} {city} {desc}"
+            return {**DEFAULT_EXTRA, **{k: ground(str(v).strip(), source)
+                                        for k, v in data.items() if k in DEFAULT_EXTRA and v}}
+    except (OpenAIError, ValueError) as e:
+        log.warning("extra info for %s: %s", name, e)
 
     return dict(DEFAULT_EXTRA)
 
@@ -181,8 +227,8 @@ def enrich_suppliers_extra(con, suppliers_list: list[dict], max_workers: int = 4
     def _worker(s):
         try:
             return s, extract_extra_info(client, s)
-        except Exception as e:
-            print(f"Error enriching {s.get('name')}: {e}")
+        except (OpenAIError, ValueError) as e:
+            log.warning("extra info for %s: %s", s.get("name"), e)
             return s, dict(DEFAULT_EXTRA)
 
     try:
@@ -193,46 +239,10 @@ def enrich_suppliers_extra(con, suppliers_list: list[dict], max_workers: int = 4
             try:
                 db.save_extra(con, s["id"], data)
                 s.update(data)
-            except Exception as e:
-                print(f"Error saving extra for {s.get('name')}: {e}")
-    except Exception as e:
-        print(f"Error in enrich_suppliers_extra executor: {e}")
-
-
-def _brand(s: dict) -> str:
-    """«Группа компаний «Вамин Татарстан»» и «Производитель … «ВАМИН»» -> «вамин»."""
-    name = s.get("name") or ""
-    m = re.search(r"[«\"]([^»\"]+)", name)
-    words = re.findall(r"[а-яёa-z0-9]+", (m.group(1) if m else name).lower())
-    return words[0] if words else ""
-
-
-def same_company(a: dict, b: dict) -> bool:
-    """Две карточки одной компании: общий телефон или почта, либо один бренд в одном городе."""
-    phones = lambda s: {re.sub(r"\D", "", p)[-10:] for p in s.get("phones") or []}
-    if phones(a) & phones(b) or set(a.get("emails") or []) & set(b.get("emails") or []):
-        return True
-    return bool(_brand(a)) and _brand(a) == _brand(b) and a.get("city") == b.get("city")
-
-
-def _company_keys(s: dict) -> set:
-    keys = {("p", re.sub(r"\D", "", p)[-10:]) for p in s.get("phones") or []}
-    keys |= {("e", e) for e in s.get("emails") or []}
-    if _brand(s):
-        keys.add(("b", _brand(s), s.get("city")))
-    return keys
-
-
-def dedupe(suppliers: list[dict]) -> list[dict]:
-    """То же, что попарный same_company, но по индексу ключей: на стартовом экране в списке вся база."""
-    out, seen = [], set()
-    for s in suppliers:
-        keys = _company_keys(s)
-        if keys & seen:
-            continue
-        seen |= keys
-        out.append(s)
-    return out
+            except sqlite3.Error as e:
+                log.warning("save extra for %s: %s", s.get("name"), e)
+    except RuntimeError as e:  # пул потоков закрыт
+        log.error("enrich_suppliers_extra executor: %s", e)
 
 
 def recommend_best_supplier(suppliers: list[dict], query: str, user_city: str | None) -> dict:
@@ -242,9 +252,13 @@ def recommend_best_supplier(suppliers: list[dict], query: str, user_city: str | 
         return {}
     suppliers = dedupe(suppliers)  # иначе одна компания становится и основным, и запасным вариантом
 
+    # сравнения считаем сами: модель путает, кто ближе («764 км — меньше, чем у остальных» при соседе в 702 км)
+    by_dist = sorted((s for s in suppliers if s.get("distance_km") is not None), key=lambda s: s["distance_km"])
+    place = {s["id"]: i for i, s in enumerate(by_dist, 1)}
     candidates_info = ""
     for i, s in enumerate(suppliers, 1):
-        dist_str = f"{s.get('distance_km')} км до г. {user_city}" if s.get("distance_km") is not None else "расстояние не указано"
+        dist_str = (f"{s.get('distance_km')} км до г. {user_city}, {place[s['id']]}-й по близости из {len(by_dist)}"
+                    if s["id"] in place else "расстояние не указано")
         phones_str = ", ".join(s.get("phones") or []) or "телефон не указан"
         emails_str = ", ".join(s.get("emails") or []) or "email не указан"
         candidates_info += f"""
@@ -278,6 +292,7 @@ def recommend_best_supplier(suppliers: list[dict], query: str, user_city: str | 
   которых в её карточке нет. Если нужный товар в карточке не назван прямо — так и скажи и сделай это риском.
 - Покупатель находится в «{user_city or 'не указан'}»: про логистику и доставку говори относительно этого города.
 - Альтернатива — другая компания, не та же под другим названием.
+- Кто ближе, бери из пометки «N-й по близости», сам расстояния не сравнивай.
 Верни ответ СТРОГО в формате JSON:
 {{
   "best_choice": {{
@@ -297,12 +312,13 @@ def recommend_best_supplier(suppliers: list[dict], query: str, user_city: str | 
 Ответ ТОЛЬКО валидный JSON:"""
 
     try:
-        raw = call_llm(client, prompt, max_tokens=900)
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if m:
-            return json.loads(m.group(0))
-    except Exception as e:
-        print(f"Error calling LLM advisor: {e}")
+        data = parse_json_from_llm(call_llm(client, prompt, max_tokens=900))
+        if isinstance(data, dict):
+            checked = check_advice(data, suppliers, candidates_info, query, user_city)
+            if checked:
+                return checked
+    except (OpenAIError, ValueError) as e:
+        log.warning("LLM advisor: %s", e)
 
     top = suppliers[0]
     sec = suppliers[1] if len(suppliers) > 1 else None
@@ -321,6 +337,53 @@ def recommend_best_supplier(suppliers: list[dict], query: str, user_city: str | 
         ],
         "outreach_script": f"Здравствуйте! Заинтересовала ваша продукция ({query or top.get('subcategory')}). Планируем оптовую закупку. Пришлите, пожалуйста, актуальный оптовый прайс-лист, условия доставки и минимальный объем отгрузки.",
     }
+
+
+def _match_supplier(name: str, suppliers: list[dict]) -> dict | None:
+    n = _norm(name)
+    for s in suppliers:
+        sn = _norm(s.get("name"))
+        if sn and (sn in n or n in sn):
+            return s
+    brands = {s["id"]: _brand(s) for s in suppliers}
+    return next((s for s in suppliers if brands[s["id"]] and brands[s["id"]] in n), None)
+
+
+def product_in_card(s: dict, query: str, city: str | None = None) -> bool | None:
+    """Назван ли искомый товар (последнее существительное запроса без города) в карточке. None — запрос без товара."""
+    import bm25, search
+    from ranking import stem
+    city_stems = {stem(w) for w in re.findall(r"\w+", city or "")}
+    nouns = [l for l, pos, _ in search.content_lemmas(query or "") if pos == "NOUN" and stem(l) not in city_stems]
+    if not nouns:
+        return None
+    prods = s.get("primary_products") or []
+    card = " ".join([s.get("name") or "", s.get("subcategory") or "", s.get("description") or "",
+                     " ".join(prods) if isinstance(prods, list) else str(prods)])
+    return nouns[-1] in set(bm25.tokenize_lemmas(card))
+
+
+def check_advice(data: dict, suppliers: list[dict], source: str, query: str = "", city: str | None = None) -> dict | None:
+    """Совет модели после проверки: компании — только из списка и разные, в обоснованиях и рисках —
+    только числа и документы, которые есть в карточках. None — совету нельзя верить, берём запасной."""
+    best = _match_supplier((data.get("best_choice") or {}).get("name", ""), suppliers)
+    if not best:
+        return None
+    alt = _match_supplier((data.get("alternative") or {}).get("name", ""), suppliers)
+    if alt and same_company(alt, best):
+        alt = None
+    out = {
+        "best_choice": {"name": best["name"], "reason": ground_sentences(data["best_choice"].get("reason", ""), source)},
+        "alternative": ({"name": alt["name"], "reason": ground_sentences(data["alternative"].get("reason", ""), source)}
+                        if alt else {"name": "—", "reason": "Другой подходящей компании среди выбранных нет."}),
+        "risks": [r for r in (data.get("risks") or []) if isinstance(r, str) and not unsupported(r, source)],
+        "outreach_script": data.get("outreach_script") or "",
+    }
+    # наличие товара проверяем по карточке сами: модель охотно «додумывает», что сыроварня делает моцареллу
+    for key, s in (("best_choice", best), ("alternative", alt)):
+        if s:
+            out[key]["product_in_card"] = product_in_card(s, query, city)
+    return out
 
 
 def select_candidates_via_llm(candidates: list[dict], query: str, user_city: str | None) -> dict:
@@ -393,8 +456,8 @@ def select_candidates_via_llm(candidates: list[dict], query: str, user_city: str
                 f"{by_id[c].get('name') or '—'}" + (f" ({by_id[c]['city']})" if by_id[c].get("city") else "")
                 for c in chosen) + "."
             return {"selected_ids": chosen, "summary": summary}
-    except Exception as e:
-        print(f"Error in select_candidates_via_llm: {e}")
+    except (OpenAIError, ValueError) as e:
+        log.warning("select_candidates_via_llm: %s", e)
 
     return {
         "selected_ids": [c["id"] for c in dedupe(candidates)[:3]],
@@ -521,14 +584,15 @@ def get_or_create_b2b_passport(con, supplier: dict, force_refresh: bool = False)
     try:
         raw = call_llm(client, prompt, max_tokens=1000)
         passport_data = parse_json_from_llm(raw)
-    except Exception as e:
-        print(f"Error generating passport for {name}: {e}")
+    except (OpenAIError, ValueError) as e:
+        log.warning("passport for %s: %s", name, e)
 
     if not passport_data or not isinstance(passport_data, dict):
         # LLM недоступна: не затираем прежний аудит шаблоном и не кэшируем шаблон — при следующем открытии повторим
         if cached and cached.get("passport"):
             return cached
-        return {"passport": default_passport, "full_text": context_text}
+        return {"passport": default_passport, "full_text": context_text,
+                "warning": "Паспорт не собран: модель не ответила. Показаны только данные карточки."}
     else:
         # Убедимся, что все ключи верхнего уровня присутствуют
         for section in ("commercial_terms", "compliance_and_quality", "logistics", "buyer_verdict"):
@@ -539,6 +603,22 @@ def get_or_create_b2b_passport(con, supplier: dict, force_refresh: bool = False)
                 val = passport_data[section].get(k)
                 if not val or (isinstance(val, str) and not re.sub(r"[\W_]", "", val)):
                     passport_data[section][k] = v
+
+    # каждое значение сверяем с текстом карточки: число или ГОСТ, которых там нет, — выдумка модели
+    source = f"{name} {sub} {city}\n{context_text}"
+    for section, fields in passport_data.items():
+        if not isinstance(fields, dict):
+            continue
+        for k, v in fields.items():
+            if k == "negotiation_questions":
+                continue  # вопросы про ГОСТ и «Меркурий» — это не утверждения
+            if k == "red_flags" and isinstance(v, list):
+                # «нет сертификатов» при упомянутых в карточке документах — тоже неправда
+                has_docs = any(re.search(p, _norm(source)) for p in DOC_MARKERS)
+                v = [f for f in v if not (has_docs and re.search(r"нет\b.*(сертифик|документ|гост)", _norm(f)))]
+            fields[k] = ground(v, source) if k != "red_flags" else [f for f in v if isinstance(f, str)]
+            if fields[k] in ([], "") and k in default_passport.get(section, {}):
+                fields[k] = default_passport[section][k]
 
     # Сохраняем в кэш БД
     db.save_passport(con, sid, passport_data, context_text)

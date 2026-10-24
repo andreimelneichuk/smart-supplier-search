@@ -3,11 +3,14 @@ import time
 from datetime import datetime
 import streamlit as st
 
+import cross_encoder
+import coverage
 import db
 import live
 import productcenter_parser as pc
 import geo
 import ranking
+import search
 import advisor
 
 PAGE_SIZE = 10
@@ -30,7 +33,21 @@ def get_con():
     return con
 
 
+@st.cache_resource(show_spinner="Загружаю модели поиска (при первом запуске это может занять минуту)…")
+def load_models():
+    # эмбеддинги и cross-encoder скачиваются при первом обращении: грузим их один раз на процесс, а не на первый поиск
+    search._get_model()
+    cross_encoder.get_reranker()
+    return True
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def db_freshness():
+    return coverage.coverage(db.connect())[1]
+
+
 con = get_con()
+load_models()
 st.session_state.setdefault("selected", set())
 st.session_state.setdefault("live_done", set())
 st.session_state.setdefault("contacts_tried", set())  # кому уже пытались подтянуть контакты в этой сессии
@@ -85,6 +102,9 @@ show_saved_toast()
 
 # --- 1. Боковая панель: Организация, Пользователь и Фильтры ---
 with st.sidebar:
+    fresh = db_freshness()
+    st.caption(f"База: {fresh['всего']} производителей, последнее добавление {fresh['последнее добавление']}. "
+               "Контакты, подтянутые с сайта, помечены датой; остальные — из снимка базы и не проверены.")
     st.markdown("### :material/business: Ваша компания")
     st.caption("Заметки и статусы видны всем сотрудникам вашей компании.")
     
@@ -179,7 +199,7 @@ RANK_RETRY_SEC = 120  # упавшую модель не дёргаем на к�
 
 
 LOCAL_KM = 150    # «рядом с городом»
-LOCAL_REL = 0.6   # с какой релевантности считаем, что у компании есть именно этот товар
+LOCAL_REL = ranking.STRONG_REL
 
 
 def run_ranking(rows=None):
@@ -190,7 +210,9 @@ def run_ranking(rows=None):
         if model != "bm25" and time.time() - failed.get(model, 0) < RANK_RETRY_SEC:
             continue
         try:
-            res = ranking.rank(rows, parsed, pc.CATEGORIES, coords, model=model)
+            # на холодном старте облака модели поиска скачиваются и грузятся 1–2 минуты — без подписи это пустой экран
+            with st.spinner("Ищу поставщиков… При первом запуске сервис загружает модели поиска, это до пары минут."):
+                res = ranking.rank(rows, parsed, pc.CATEGORIES, coords, model=model)
         except Exception as e:
             if model == "bm25":
                 raise
@@ -256,9 +278,6 @@ if parsed["city"] and results is not None:
         if geocode_missing(results[:30]):
             results = run_ranking()
 
-
-# одна компания часто заведена несколькими карточками (бренд, филиал) — оставляем лучшую по баллу
-results = advisor.dedupe(results)
 
 # если в городе нет производителей именно этого товара — говорим прямо, а не молча показываем другие регионы
 no_local = None
@@ -335,6 +354,8 @@ def show_b2b_passport_dialog(item_id: int):
     is_force = st.session_state.pop(force_key, False)
     with st.spinner("Разбираю условия поставщика…"):
         passport_data = advisor.get_or_create_b2b_passport(con, item, force_refresh=is_force)
+    if passport_data.get("warning"):
+        st.warning(passport_data["warning"], icon=":material/report:")
 
     p = passport_data.get("passport", {})
     comm = p.get("commercial_terms", {})
@@ -525,8 +546,13 @@ with tab_list:
                 f"В базе {len(suppliers)} производителей.", icon=":material/search:")
     else:
         pages = max(1, -(-len(results) // PAGE_SIZE))
-        c1, c_ai = st.columns([3, 3])
+        c1, c_sort, c_ai = st.columns([3, 2, 3], vertical_alignment="bottom")
         c1.subheader(f"Найдено поставщиков: {len(results)}")
+        sort_opts = [m for m in ranking.SORTS if m != "Ближе к городу" or parsed["city"]]
+        sort_mode = c_sort.selectbox("Сортировка", sort_opts, key="sort_mode", label_visibility="collapsed",
+                                     help="«Лучшее совпадение» учитывает всё сразу. В остальных сортировках сначала идут "
+                                          "те, у кого точно есть искомый товар, а внутри — по выбранному признаку. "
+                                          "«Надёжнее» — по полноте карточки: телефон, почта, ассортимент, описание.")
         if no_local:
             st.info(f"В г. {parsed['city']} и в радиусе {LOCAL_KM} км производителей именно этого товара нет — "
                     f"ближайший в {no_local} км. Местные компании со смежным ассортиментом тоже в списке, "
@@ -546,7 +572,7 @@ with tab_list:
                     st.rerun()
 
         # ключ зависит от запроса и фильтров: новая выдача открывается с первой страницы
-        page_key = f"page|{query_key}|{selected_model}|{cat_f}|{only_contacts}|{only_my_crm}"
+        page_key = f"page|{query_key}|{selected_model}|{cat_f}|{only_contacts}|{only_my_crm}|{sort_mode}"
         # переключатель страниц рисуется под списком, а номер нужен уже здесь — берём его из состояния виджета
         page = min(st.session_state.get(page_key, 1), pages)
 
@@ -557,7 +583,8 @@ with tab_list:
                 st.session_state.pop("selection_summary", None)
                 st.rerun()
 
-        chunk = results[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
+        shown = ranking.sort_results(results, sort_mode)
+        chunk = shown[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
 
         # контакты подгружаем только тем, кто на экране
         # неудачные попытки не повторяем на каждом клике: иначе любое действие ждёт сетевые таймауты
@@ -611,8 +638,12 @@ with tab_list:
                     if r["emails"]:
                         contact_line += (" · " if contact_line else "") + ":material/mail: " + " · ".join(f"[{e}](mailto:{e})" for e in r["emails"])
                     left.markdown(contact_line)
-                else:
+                    if not r.get("contacts_at"):
+                        left.caption(":material/help: Из снимка базы, с сайта не проверялось")
+                elif r.get("contacts_at"):
                     left.caption("Контакты на сайте не указаны")
+                else:
+                    left.caption(":material/help: Контакты не проверены: в снимке базы их нет")
 
                 # Статус в CRM и заметки текущей организации
                 crm_status = r.get("user_status", "Не связывались")
@@ -727,13 +758,24 @@ with tab_cmp:
             adv = st.session_state["last_advice"]
             if st.session_state.get("last_advice_for") != sorted(st.session_state.selected):
                 st.warning("Список поставщиков изменился — нажмите «Получить совет» ещё раз.", icon=":material/sync_problem:")
+            def product_note(choice: dict):
+                # проверено кодом по карточке, а не словами модели
+                if choice.get("product_in_card") is False:
+                    st.caption(":material/warning: В карточке этой компании искомый товар прямо не назван — уточните наличие.")
+                elif choice.get("product_in_card"):
+                    st.caption(":material/check_circle: Искомый товар указан в карточке компании.")
+
             cb, ca = st.columns(2)
             with cb:
                 st.success(f"**Лучший вариант: {adv.get('best_choice', {}).get('name', '—')}**", icon=":material/trophy:")
+                product_note(adv.get("best_choice", {}))
                 st.write(adv.get("best_choice", {}).get("reason", ""))
             with ca:
                 st.info(f"**Запасной вариант: {adv.get('alternative', {}).get('name', '—')}**", icon=":material/swap_horiz:")
+                product_note(adv.get("alternative", {}))
                 st.write(adv.get("alternative", {}).get("reason", ""))
+            st.caption("Цифры, ГОСТы и сертификаты в совете и паспорте сверяются с текстом карточек: "
+                       "то, чего там нет, сервис убирает из ответа модели.")
 
             st.markdown("##### На что обратить внимание")
             for rk in adv.get("risks", []):
