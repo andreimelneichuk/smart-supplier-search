@@ -30,6 +30,16 @@ FIELD_WEIGHTS = {
 }
 K1 = 1.5
 B = 0.75
+COMPOUND_TF = 0.7  # вклад составного слова («хлебокомбинат») относительно точного («хлеб»)
+
+
+COMPOUND_MIN_STEM, COMPOUND_MIN_TAIL = 4, 3
+
+
+def is_compound_of(word: str, lemma: str) -> bool:
+    """«хлебокомбинат» / «хлебобулочный» начинаются с «хлеб». Короткие основы («сыр», «мёд») не расширяем:
+    «сыр» дал бы «сырьё», «мёд» — «медведь». Хвост от 3 букв отсекает формы самого слова («рыбы»)."""
+    return len(lemma) >= COMPOUND_MIN_STEM and len(word) >= len(lemma) + COMPOUND_MIN_TAIL and word.startswith(lemma)
 
 
 @lru_cache(maxsize=50000)
@@ -103,7 +113,10 @@ class BM25Index:
 
         query_counts = Counter(query_lemmas)
         for term, q_cnt in query_counts.items():
-            idf = self.idf(term)
+            # «хлеб» находит и «хлебокомбинат», «хлебобулочный» — с меньшим весом
+            compounds = {t for t in self.doc_freqs if t != term and is_compound_of(t, term)}
+            idf = self.idf(term) if self.doc_freqs.get(term) else (
+                max((self.idf(t) for t in compounds), default=0.0))
             if idf <= 0:
                 continue
 
@@ -115,6 +128,8 @@ class BM25Index:
                     if not toks:
                         continue
                     tf = toks.count(term)
+                    if compounds:
+                        tf += COMPOUND_TF * sum(1 for t in toks if t in compounds)
                     if tf > 0:
                         len_d = self.field_lengths[f][i]
                         avg_len = self.avg_field_len[f]
